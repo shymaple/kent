@@ -1,0 +1,46 @@
+[
+  { "id": "t1", "channel": "#design", "from": "Alex", "sentAt": "2026-08-07T10:00:00+05:30",
+    "text": "<@me> can you review the onboarding copy before the Thursday sync?" },
+
+  { "id": "n1", "channel": "#eng", "from": "Jordan", "sentAt": "2026-08-07T10:05:00+05:30",
+    "text": "<@me> what happened with the deploy yesterday?" },
+
+  { "id": "n2", "channel": "#eng", "from": "Robin", "sentAt": "2026-08-07T10:10:00+05:30",
+    "text": "<@me> any update on this?" },
+
+  { "id": "n3", "channel": "#general", "from": "Dana", "sentAt": "2026-08-07T10:15:00+05:30",
+    "text": "<@me> nice work on the migration, that was a tricky one" },
+
+  { "id": "n4", "channel": "#marketing", "from": "Jordan", "sentAt": "2026-08-07T10:20:00+05:30",
+    "text": "<@me> FYI the campaign numbers came in, sharing here for visibility" },
+
+  { "id": "n5", "channel": "#eng", "from": "Robin", "sentAt": "2026-08-07T10:25:00+05:30",
+    "text": "<@me> do you know if Alex is on leave this week?" },
+
+  { "id": "n6", "channel": "#random", "from": "Dana", "sentAt": "2026-08-07T10:30:00+05:30",
+    "text": "<@me> what do you think about the new office layout?" },
+
+  { "id": "n7", "channel": "#eng", "from": "Jordan", "sentAt": "2026-08-07T10:35:00+05:30",
+    "text": "<@me> ignore my last message, I already fixed it myself" },
+
+  { "id": "n8", "channel": "#eng", "from": "Alex", "sentAt": "2026-08-07T10:40:00+05:30",
+    "text": "<@me> tagging you so you have context, no action needed" },
+
+  { "id": "n9", "channel": "#marketing", "from": "Taskbot", "sentAt": "2026-08-07T10:45:00+05:30",
+    "text": "Alex is currently working on the pricing page update." },
+
+  { "id": "t2", "channel": "#eng", "from": "Dana", "sentAt": "2026-08-07T10:50:00+05:30",
+    "text": "<@me> prod checkout is throwing 500s, need this fixed today, blocking the release" },
+
+  { "id": "t3", "channel": "#design", "from": "Alex", "sentAt": "2026-08-07T10:55:00+05:30",
+    "text": "<@me> please create an Instagram post for the Q4 launch by 28 August" },
+
+  { "id": "t4", "channel": "#eng", "from": "Robin", "sentAt": "2026-08-07T11:00:00+05:30",
+    "text": "<@me> can you send the the quarterly report when you get a sec" },
+
+  { "id": "n10", "channel": "#general", "from": "Jordan", "sentAt": "2026-08-07T11:05:00+05:30",
+    "text": "<!channel> reminder that the office is closed on Friday" },
+
+  { "id": "t5", "channel": "#eng", "from": "Alex", "sentAt": "2026-08-07T11:10:00+05:30",
+    "text": "<@me> blocked on your review of the API spec, can you take a look by EOD?" }
+]

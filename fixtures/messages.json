@@ -1,0 +1,38 @@
+[
+  {
+    "id": "m1",
+    "channel": "#design",
+    "from": "Alex",
+    "sentAt": "2026-08-05T10:00:00+05:30",
+    "text": "can you review the onboarding copy before the Thursday sync? doc is here <https://docs.google.com/document/d/abc|Onboarding copy>"
+  },
+  {
+    "id": "m2",
+    "channel": "#general",
+    "from": "Jordan",
+    "sentAt": "2026-08-05T11:15:00+05:30",
+    "text": "<!channel> please fill the office snack preference form by end of month",
+    "isBroadcast": true
+  },
+  {
+    "id": "m3",
+    "channel": "#eng",
+    "from": "Robin",
+    "sentAt": "2026-08-05T12:00:00+05:30",
+    "text": "thanks for the fix earlier, worked great!"
+  },
+  {
+    "id": "m4",
+    "channel": "#eng",
+    "from": "Dana",
+    "sentAt": "2026-08-05T12:30:00+05:30",
+    "text": "prod checkout is throwing 500s, need this fixed today - blocking the release"
+  },
+  {
+    "id": "m5",
+    "channel": "#eng",
+    "from": "Robin",
+    "sentAt": "2026-08-05T14:00:00+05:30",
+    "text": "at some point it'd be nice to clean up the old feature flags, no rush"
+  }
+]

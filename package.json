@@ -1,0 +1,35 @@
+{
+  "name": "kent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kent \u2014 a local Slack-to-Kanban task bot. Uses your Claude Code login, no API keys.",
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently -n server,client -c blue,magenta \"node --watch server/index.js\" \"npm run dev -w client\"",
+    "build": "npm run build -w client",
+    "test": "node --test server/*.test.js",
+    "probe": "node server/scripts/probe.js",
+    "classify-once": "node server/scripts/classify-once.js",
+    "triage-check": "node server/scripts/triage-check.js",
+    "dry-run": "node server/scripts/dry-run.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shymaple/kent.git"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+client/dist/
+
+# Never commit anything derived from a real workspace or a real token.
+data/
+*.db
+*.db-shm
+*.db-wal
+.slack-token
+.env
+.env.*
+*.log
+.DS_Store
