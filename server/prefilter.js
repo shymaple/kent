@@ -43,7 +43,7 @@ export function plainText(text = '') {
  * @returns {null | { reason, isBroadcast }}
  */
 export function classifyCandidate(message, ctx) {
-  const { myUserId, channelKind, aliasMatcher, myThreadTs } = ctx;
+  const { myUserId, channelKind, aliasMatcher, myThreadTs, priorityUserIds } = ctx;
 
   // Structural skips - never worth a look.
   if (!message || message.subtype === 'channel_join' || message.subtype === 'channel_leave') return null;
@@ -80,17 +80,28 @@ export function classifyCandidate(message, ctx) {
     return { reason, isBroadcast: false };
   }
 
-  // 2. Reply inside a thread I participate in.
+  // 2. Anything from someone on the priority list.
+  //
+  // People who matter often just say "can you take a look at this" without
+  // tagging anyone - in a DM or a small channel the mention is redundant to
+  // them, but it is the only signal we had. The list is small and hand-picked,
+  // so reading everything they write is cheap, and the model still decides
+  // whether it is actually a task.
+  if (priorityUserIds?.size && message.user && priorityUserIds.has(message.user)) {
+    return { reason: 'priority_person', isBroadcast: false };
+  }
+
+  // 3. Reply inside a thread I participate in.
   if (message.thread_ts && message.thread_ts !== message.ts && myThreadTs?.has(message.thread_ts)) {
     return { reason: 'thread_reply', isBroadcast: false };
   }
 
-  // 3. Channel-wide broadcast - low value, goes to Miscellaneous.
+  // 4. Channel-wide broadcast - low value, goes to Miscellaneous.
   if (BROADCAST_RE.test(text)) {
     return { reason: 'broadcast', isBroadcast: true };
   }
 
-  // 4. My name typed out without an @mention.
+  // 5. My name typed out without an @mention.
   if (aliasMatcher && aliasMatcher.test(plainText(text))) {
     return { reason: 'alias', isBroadcast: false };
   }

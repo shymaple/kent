@@ -134,7 +134,8 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
     .run().lastInsertRowid;
 
   const stats = {
-    channels: 0, messages: 0, candidates: 0, llmCalls: 0, inboxed: 0, rejected: 0, errors: [],
+    channels: 0, messages: 0, candidates: 0, llmCalls: 0, inboxed: 0, rejected: 0,
+    catchingUp: 0, errors: [],
   };
 
   try {
@@ -154,6 +155,7 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
     const backfillDays = Number.isFinite(rawBackfill) && rawBackfill >= 0 ? rawBackfill : 0;
     const aliasMatcher = buildAliasMatcher(getAliases());
     const priorityIds = new Set(priorityPeople.all().map((r) => r.slack_user_id));
+    const watchPriorityPeople = getSetting('watch_priority_people') !== 'false';
     const people = new Map(
       db.prepare('SELECT slack_user_id, display_name FROM people').all().map((r) => [r.slack_user_id, r.display_name])
     );
@@ -171,6 +173,12 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
       try {
         const messages = await slack.fetchHistory(channel.id, { oldest });
         stats.messages += messages.length;
+
+        // A channel with more history than one sync can pull is not an error -
+        // the cursor advances to what we did read, so the next sync resumes
+        // there. Counting it lets the UI say a backlog is still being worked
+        // through rather than looking finished when it isn't.
+        if (messages.truncated) stats.catchingUp++;
 
         const threadSet =
           channel.kind === 'channel' || channel.kind === 'private'
@@ -207,6 +215,7 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
             channelKind: channel.kind,
             aliasMatcher,
             myThreadTs: threadSet,
+            priorityUserIds: watchPriorityPeople ? priorityIds : null,
           });
           if (!hit) continue;
 
@@ -252,7 +261,12 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
       }
     }
 
-    onLog(`${stats.messages} messages scanned, ${stats.candidates} candidates`);
+    onLog(
+      `${stats.messages} messages scanned, ${stats.candidates} candidates` +
+        (stats.catchingUp
+          ? ` · ${stats.catchingUp} channel(s) still catching up, sync again to continue`
+          : '')
+    );
 
     // ---- Step 4: the only LLM work, batched, skipped entirely when empty. ----
     const verdicts = new Map();
@@ -268,6 +282,10 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
             sentAt: c.sentAt,
             text: c.text,
             isBroadcast: c.isBroadcast,
+            // Without this, an unaddressed "we need X done by Thursday" from
+            // someone senior reads as ambiguous and scores below the confidence
+            // floor - which is exactly the message the user wanted caught.
+            fromPriorityPerson: priorityIds.has(c.assignerId),
           })),
           { model, timezone }
         );

@@ -220,6 +220,7 @@ export async function fetchHistory(channelId, { oldest, limit = 200, maxPages = 
   const messages = [];
   let cursor;
   let pages = 0;
+  let truncated = false;
 
   do {
     const json = await call(
@@ -229,11 +230,22 @@ export async function fetchHistory(channelId, { oldest, limit = 200, maxPages = 
     );
     messages.push(...(json.messages ?? []));
     cursor = json.has_more ? json.response_metadata?.next_cursor : undefined;
-  } while (cursor && ++pages < maxPages);
+    if (cursor && ++pages >= maxPages) {
+      // More history is waiting. Slack anchors on `oldest` and walks forward, so
+      // we have the *earliest* messages since the cursor and the caller will
+      // advance to the newest of those - the next sync resumes exactly here and
+      // nothing is skipped. Flagged so the UI can say "still catching up".
+      truncated = true;
+      break;
+    }
+  } while (cursor);
 
-  return messages
+  const sorted = messages
     .filter((m) => m.ts !== oldest)
     .sort((a, b) => Number(a.ts) - Number(b.ts));
+
+  sorted.truncated = truncated;
+  return sorted;
 }
 
 /** Replies in a thread, oldest-first, excluding the parent message. */

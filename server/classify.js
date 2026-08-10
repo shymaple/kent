@@ -151,6 +151,7 @@ export async function classifyBatch(candidates, { model, timezone } = {}) {
     text: c.text,
     ...(c.threadContext ? { thread_context: c.threadContext } : {}),
     ...(c.isBroadcast ? { broadcast_to_channel: true } : {}),
+    ...(c.fromPriorityPerson ? { from_priority_person: true } : {}),
   }));
 
   const prompt = [

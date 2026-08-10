@@ -227,6 +227,7 @@ export const DEFAULT_SETTINGS = {
   batch_size: '15',
   auto_sync: 'true',
   min_confidence: '0.5',   // below this the model's "task" call is not trusted
+  watch_priority_people: 'true',   // read everything they write, mention or not
   show_completed: 'true',
   show_miscellaneous: 'true',
   comment_templates: '[]',

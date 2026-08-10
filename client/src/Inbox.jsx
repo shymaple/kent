@@ -5,6 +5,7 @@ import { dueChipClass, dueLabel } from './TaskCard.jsx';
 const REASON_LABEL = {
   mention: 'mentioned you',
   self: 'you tagged yourself',
+  priority_person: 'from a priority person',
   dm: 'direct message',
   group_dm: 'group DM',
   thread_reply: 'thread reply',

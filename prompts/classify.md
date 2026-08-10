@@ -10,6 +10,8 @@ Being @mentioned is not enough. Mark `is_task` false for:
 
 When it is genuinely ambiguous, mark `is_task` false. A missed task costs the user one Slack reply; a false task costs them their focus.
 
+One exception: if `from_priority_person` is true, the sender is someone whose requests land on the user's plate. Read an unaddressed ask from them ("we need X by Thursday", "this needs updating") as work for the user, and score it accordingly. Social chat from them is still not a task.
+
 Fields:
 - `title` — imperative, max 8 words, no names or @handles.
 - `description` — one sentence of context, or null if the title says it all.

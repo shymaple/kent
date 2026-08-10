@@ -106,6 +106,7 @@ app.put('/api/settings', (req, res) => {
   const allowed = [
     'poll_interval_minutes', 'backfill_days', 'model', 'timezone', 'batch_size', 'auto_sync',
     'slack_user_id_override', 'min_confidence', 'show_completed', 'show_miscellaneous',
+    'watch_priority_people',
   ];
   const patch = {};
   for (const key of allowed) {

@@ -37,6 +37,46 @@ test('a DM using my name without an @mention is still caught', () => {
   assert.equal(r.reason, 'alias');
 });
 
+test('anything from a priority person is a candidate, mention or not', () => {
+  const withPriority = ctx({ priorityUserIds: new Set(['U0BOSS']) });
+
+  const r = classifyCandidate({ user: 'U0BOSS', text: 'can you take a look at this when free', ts: '1.0' }, withPriority);
+  assert.deepEqual(r, { reason: 'priority_person', isBroadcast: false });
+
+  // Same message from anyone else is still ignored.
+  assert.equal(
+    classifyCandidate({ user: 'U0X', text: 'can you take a look at this when free', ts: '1.0' }, withPriority),
+    null
+  );
+});
+
+test('a priority person who does @mention me is still labelled a mention', () => {
+  const r = classifyCandidate(
+    { user: 'U0BOSS', text: `<@${ME}> ship this today`, ts: '1.0' },
+    ctx({ priorityUserIds: new Set(['U0BOSS']) })
+  );
+  assert.equal(r.reason, 'mention', 'the more specific signal wins the label');
+});
+
+test('priority watching does not resurrect bots or my own messages', () => {
+  const withPriority = ctx({ priorityUserIds: new Set(['U0BOSS', ME]) });
+  assert.equal(
+    classifyCandidate({ user: 'U0BOSS', bot_id: 'B01', text: 'build passed', ts: '1.0' }, withPriority),
+    null,
+    'a bot on the priority list is still a bot'
+  );
+  assert.equal(
+    classifyCandidate({ user: ME, text: 'thinking out loud', ts: '1.0' }, withPriority),
+    null,
+    'I cannot become my own priority person'
+  );
+});
+
+test('an empty or absent priority list changes nothing', () => {
+  assert.equal(classifyCandidate({ user: 'U0BOSS', text: 'morning', ts: '1.0' }, ctx({ priorityUserIds: new Set() })), null);
+  assert.equal(classifyCandidate({ user: 'U0BOSS', text: 'morning', ts: '1.0' }, ctx()), null);
+});
+
 test('detects a reply in a thread I am part of', () => {
   const r = classifyCandidate(
     { user: 'U0X', text: 'any update?', ts: '1700000100.5', thread_ts: '1700000000.000100' },

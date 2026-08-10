@@ -69,8 +69,9 @@ Work through it in this order — most problems are the first two.
 1. **Is the conversation watched?** `GET /api/channels` → check `is_excluded`.
 2. **Does the message clear the bar?** A message becomes a candidate only if it
    @mentions the user, uses a configured alias, replies in a thread they're in,
-   or is an `@channel`/`@here` broadcast. This is identical in DMs — ordinary
-   chat never qualifies. Bot messages only count if they @mention the user.
+   is an `@channel`/`@here` broadcast, or comes from someone on the priority
+   list. This is identical in DMs — ordinary chat never qualifies. Bot messages
+   only count if they @mention the user.
 3. **Did the model reject it?** Non-tasks are recorded in `seen_messages` with
    outcome `not_task`. Being @mentioned isn't enough: questions answerable in one
    reply, FYIs and thanks are all rejected by design.
@@ -95,7 +96,10 @@ All under `PUT /api/settings` unless noted:
 - `min_confidence` — `0.3` loose, `0.5` balanced, `0.7` strict.
 - `backfill_days` — `0` means only new messages.
 - Priority people — `PUT /api/people/:id {is_priority}`; anything from them is
-  forced to **high**, in code, regardless of the model.
+  forced to **high**, in code, regardless of the model. Their messages are also
+  read in full even without a mention (setting `watch_priority_people`), and the
+  model is told the sender is a priority person so an unaddressed "we need X by
+  Thursday" reads as work rather than as ambiguous chatter.
 - Watched conversations — `PUT /api/channels/:id {is_excluded}`.
 
 The classification prompt is `prompts/classify.md`; the reply prompt is

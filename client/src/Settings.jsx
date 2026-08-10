@@ -78,6 +78,7 @@ export default function Settings({ onError, onChange }) {
         aliases: settings.aliases,
         slack_user_id_override: settings.slack_user_id_override ?? '',
         min_confidence: settings.min_confidence,
+        watch_priority_people: settings.watch_priority_people,
         ...extra,
       });
       setSaved(true);
@@ -323,6 +324,25 @@ export default function Settings({ onError, onChange }) {
         <p className="hint">
           Anything from these people is marked <strong>High</strong> automatically, whatever the
           message says.
+        </p>
+
+        <label className="toggle" style={{ marginBottom: 12 }}>
+          <input
+            type="checkbox"
+            checked={settings.watch_priority_people !== 'false'}
+            onChange={(e) => {
+              const v = String(e.target.checked);
+              patch({ watch_priority_people: v });
+              save({ watch_priority_people: v });
+            }}
+          />
+          Read everything they write, even when they don't mention me
+        </label>
+        <p className="hint" style={{ marginTop: -6 }}>
+          People who matter often just say “can you look at this” without tagging anyone. With this
+          on, their messages are checked for tasks the same way a mention would be — the model still
+          decides whether it's actually work. Off, they only count when they mention you or use one
+          of your names.
         </p>
 
         {priorityPeople.length > 0 && (

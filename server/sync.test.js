@@ -152,20 +152,61 @@ test('a second sync with nothing new makes zero model calls', async () => {
 });
 
 test('priority people force High regardless of the model verdict', async () => {
-  db.prepare("UPDATE people SET is_priority = 1 WHERE slack_user_id = 'U3'").run();
   db.prepare('DELETE FROM seen_messages').run();
   db.prepare('DELETE FROM inbox_items').run();
   db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
+  db.prepare("UPDATE people SET is_priority = 1 WHERE slack_user_id = 'U3'").run();
 
   await sync();
   const dm = db.prepare("SELECT * FROM inbox_items WHERE reason = 'dm'").get();
   assert.equal(dm.priority, 'high');
+  db.prepare('UPDATE people SET is_priority = 0').run();
+});
+
+test('a priority person is read even when they never mention me', async () => {
+  db.prepare('DELETE FROM seen_messages').run();
+  db.prepare('DELETE FROM inbox_items').run();
+  db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
+
+  // U2 posts the coffee chatter and the broadcast in #eng, and mentions nobody.
+  db.prepare("UPDATE people SET is_priority = 1 WHERE slack_user_id = 'U2'").run();
+
+  const stats = await sync();
+  const chatter = db
+    .prepare("SELECT * FROM inbox_items WHERE reason = 'priority_person'")
+    .all();
+  assert.ok(chatter.length >= 1, 'their un-mentioned message now reaches the model');
+  assert.ok(stats.candidates > 3, 'more candidates than the mention-only baseline');
+
+  db.prepare("UPDATE people SET is_priority = 0 WHERE slack_user_id = 'U2'").run();
+});
+
+test('turning off priority watching restores the mention-only bar', async () => {
+  db.prepare('DELETE FROM seen_messages').run();
+  db.prepare('DELETE FROM inbox_items').run();
+  db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
+  db.prepare("UPDATE people SET is_priority = 1 WHERE slack_user_id = 'U2'").run();
+  setSetting('watch_priority_people', 'false');
+
+  const stats = await sync();
+  assert.equal(stats.candidates, 3, 'back to mention + broadcast + addressed DM');
+  assert.equal(
+    db.prepare("SELECT COUNT(*) n FROM inbox_items WHERE reason = 'priority_person'").get().n,
+    0
+  );
+
+  setSetting('watch_priority_people', 'true');
+  db.prepare("UPDATE people SET is_priority = 0 WHERE slack_user_id = 'U2'").run();
 });
 
 test('a message the model rejects is recorded, not inboxed', async () => {
   db.prepare('DELETE FROM seen_messages').run();
   db.prepare('DELETE FROM inbox_items').run();
   db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
 
   await runSync({
     classifier: async (candidates) => ({
@@ -185,6 +226,7 @@ test('a classifier failure holds messages back instead of inboxing raw text', as
   db.prepare('DELETE FROM seen_messages').run();
   db.prepare('DELETE FROM inbox_items').run();
   db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
 
   const stats = await runSync({
     classifier: async () => {
@@ -246,6 +288,7 @@ test('excluded channels are skipped entirely', async () => {
   db.prepare('DELETE FROM seen_messages').run();
   db.prepare('DELETE FROM inbox_items').run();
   db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
   db.prepare("UPDATE channels SET is_excluded = 1 WHERE id = 'C1'").run();
 
   const stats = await sync();
