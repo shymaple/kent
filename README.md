@@ -30,8 +30,8 @@ On a real workspace sync: **69 messages → 15 candidates → 14 rejected → 1 
   - **@mentions you**, or
   - uses **your name** without an @-mention (configurable aliases), or
   - **replies in a thread** you're part of, or
-  - is an **`@channel` / `@here` broadcast** → routed to a **Miscellaneous** lane
-    with a muted background, so low-value asks never sit beside real work, or
+  - is an **`@channel` / `@here` broadcast** → captured as a low-priority card,
+    tinted so you can see at a glance it was not addressed to you, or
   - comes from a **priority person** — anyone on that short list is read in full,
     mention or not, because people who matter often just say "this needs updating"
     without tagging anyone

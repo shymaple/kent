@@ -206,9 +206,11 @@ export default function Board({
   const visible = showSnoozed ? tasks : tasks.filter((t) => !t.is_snoozed);
   const snoozedCount = tasks.filter((t) => t.is_snoozed).length;
 
-  // Broadcasts live in the Miscellaneous lane until done, then rejoin the board.
-  const boardTasks = visible.filter((t) => !t.is_broadcast || t.status === 'completed');
-  const misc = ordered(visible.filter((t) => t.is_broadcast && t.status !== 'completed'));
+  // Channel-wide asks sit in the normal columns and behave like any other card.
+  // They are forced to low priority when captured, so smart order already sinks
+  // them below real work - a separate lane was never doing anything the colour
+  // and the priority weren't. The toggle now just filters them out entirely.
+  const boardTasks = showMisc ? visible : visible.filter((t) => !t.is_broadcast);
 
   const cardProps = {
     onOpen: setOpenTask,
@@ -238,7 +240,7 @@ export default function Board({
             checked={showMisc}
             onChange={(e) => onSettings({ show_miscellaneous: String(e.target.checked) })}
           />
-          Miscellaneous
+          Channel-wide
         </label>
 
         {snoozedCount > 0 && (
@@ -369,20 +371,6 @@ export default function Board({
           )}
         </div>
       </div>
-
-      {showMisc && misc.length > 0 && (
-        <section className="misc-lane">
-          <header className="column-head">
-            <span>Miscellaneous · channel-wide asks</span>
-            <span className="count">{misc.length}</span>
-          </header>
-          <div className="misc-grid">
-            {misc.map((t) => (
-              <TaskCard key={t.id} task={t} dragging={dragId === t.id} {...cardProps} />
-            ))}
-          </div>
-        </section>
-      )}
 
       {tasks.length === 0 && (
         <p className="empty">

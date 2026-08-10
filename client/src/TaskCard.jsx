@@ -50,7 +50,15 @@ export default function TaskCard({ task, onOpen, onDragStart, onDragEnd, draggin
         {task.due_date && (
           <span className={`chip ${dueChipClass(days)}`}>{dueLabel(task.due_date, days)}</span>
         )}
-        {task.category && task.category !== 'other' && <span className="chip">{task.category}</span>}
+        {/* Without a lane header, the tint needs a label to mean anything. */}
+        {task.is_broadcast && (
+          <span className="chip" title="Sent to the whole channel, not to you personally">
+            channel-wide
+          </span>
+        )}
+        {task.category && task.category !== 'other' && task.category !== 'broadcast' && (
+          <span className="chip">{task.category}</span>
+        )}
         {task.stale_days != null && (
           <span className="chip medium" title="Untouched while in progress">
             idle {task.stale_days}d

@@ -220,7 +220,11 @@ main.board-main { margin: 0; max-width: none; }
 .card.p-high { border-left-color: var(--high); }
 .card.p-medium { border-left-color: var(--medium); }
 .card.p-low { border-left-color: var(--low); }
-.card.misc { background: var(--misc-bg); border-color: var(--misc-line); }
+.card.misc {
+  background: var(--misc-bg);
+  border-color: var(--misc-line);
+  border-left-style: dashed;   /* reads as "not really yours" at a glance */
+}
 
 .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .card-title { font-weight: 550; margin-bottom: 6px; line-height: 1.35; overflow-wrap: anywhere; }
@@ -257,17 +261,6 @@ main.board-main { margin: 0; max-width: none; }
 .chip.overdue { color: var(--overdue); border-color: color-mix(in srgb, var(--overdue) 45%, var(--line)); font-weight: 600; }
 .chip a, a.chip { color: inherit; text-decoration: none; }
 .chip a:hover, a.chip:hover { text-decoration: underline; }
-
-/* ---------------------------------------------------------- misc lane */
-
-.misc-lane {
-  margin-top: 22px; padding: 12px;
-  background: var(--misc-bg); border: 1px solid var(--misc-line);
-  border-radius: var(--radius);
-}
-.misc-lane .column-head { margin-bottom: 8px; }
-.misc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
-.misc-grid .card { margin-bottom: 0; }
 
 /* ---------------------------------------------------------------- inbox */
 
