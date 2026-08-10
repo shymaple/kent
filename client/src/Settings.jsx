@@ -78,6 +78,7 @@ export default function Settings({ onError, onChange }) {
         aliases: settings.aliases,
         slack_user_id_override: settings.slack_user_id_override ?? '',
         min_confidence: settings.min_confidence,
+        stale_after_days: settings.stale_after_days,
         watch_priority_people: settings.watch_priority_people,
         ...extra,
       });
@@ -651,6 +652,15 @@ export default function Settings({ onError, onChange }) {
               <option value="0.5">Balanced (recommended)</option>
               <option value="0.7">Strict — only clear, unambiguous asks</option>
             </select>
+          </div>
+          <div>
+            <label>Flag as idle after (days)</label>
+            <input
+              type="number"
+              min="1"
+              value={settings.stale_after_days}
+              onChange={(e) => patch({ stale_after_days: e.target.value })}
+            />
           </div>
           <div>
             <label>Background sync</label>

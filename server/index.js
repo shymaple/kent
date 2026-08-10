@@ -10,7 +10,7 @@ import {
 import { getSlackToken, hasSlackToken, maskToken, setSlackToken, clearSlackToken } from './secrets.js';
 import * as slack from './slack.js';
 import { lastSyncRun, refreshDirectories, runSync, startScheduler, isRunning } from './sync.js';
-import { daysUntil } from './enrich.js';
+import { daysUntil, localDateString } from './enrich.js';
 import { draftComment, summariseTone } from './classify.js';
 import { renderSlackText, renderConversationName, invalidateDirectory } from './render.js';
 
@@ -67,20 +67,55 @@ const PORT = Number(process.env.PORT) || 4317;
 const STATUSES = new Set(['open', 'in_progress', 'in_review', 'completed']);
 const PRIORITIES = new Set(['high', 'medium', 'low']);
 
+const commentStats = db.prepare(
+  'SELECT COUNT(*) n, SUM(slack_ts IS NOT NULL) replied FROM comments WHERE task_id = ?'
+);
+
+/** Whole days since an ISO/SQLite timestamp, or null. */
+function daysSince(stamp) {
+  if (!stamp) return null;
+  const t = Date.parse(stamp.includes('T') ? stamp : `${stamp.replace(' ', 'T')}Z`);
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86_400_000);
+}
+
 /**
  * Shape a task or inbox row for the client. Slack markup is rendered here so no
  * view can accidentally show a raw member id like <@U01ABC23DEF>.
  */
-const parseTask = (row) => ({
-  ...row,
-  is_broadcast: Boolean(row.is_broadcast),
-  links: JSON.parse(row.links || '[]'),
-  title: renderSlackText(row.title),
-  description: renderSlackText(row.description),
-  source_text: renderSlackText(row.source_text),
-  channel_name: renderConversationName(row.channel_name),
-  days_until_due: daysUntil(row.due_date, getSettings().timezone),
-});
+const parseTask = (row) => {
+  const settings = getSettings();
+  const base = {
+    ...row,
+    is_broadcast: Boolean(row.is_broadcast),
+    links: JSON.parse(row.links || '[]'),
+    title: renderSlackText(row.title),
+    description: renderSlackText(row.description),
+    source_text: renderSlackText(row.source_text),
+    channel_name: renderConversationName(row.channel_name),
+    days_until_due: daysUntil(row.due_date, settings.timezone),
+  };
+
+  // Only real tasks have comments; inbox rows share this shaper but have no id
+  // in the tasks table.
+  if (row.list_id === undefined) return base;
+
+  const stats = commentStats.get(row.id) ?? { n: 0, replied: 0 };
+  const list = db.prepare('SELECT semantic FROM lists WHERE id = ?').get(row.list_id);
+  const idleDays = daysSince(row.updated_at);
+  const threshold = Number(settings.stale_after_days) || 7;
+
+  return {
+    ...base,
+    comment_count: stats.n,
+    replied_in_slack: Boolean(stats.replied),
+    can_reply: Boolean(row.channel_id && (row.thread_ts || row.message_ts)),
+    // "Stale" only means something for work supposedly in flight - a card
+    // sitting in Open is a backlog item, not a stalled one.
+    stale_days: list?.semantic === 'active' && idleDays >= threshold ? idleDays : null,
+    is_snoozed: Boolean(row.snooze_until && row.snooze_until > localDateString(new Date(), settings.timezone)),
+  };
+};
 
 /** Wrap an async handler so a rejection becomes a clean 500 instead of a hang. */
 const h = (fn) => (req, res) => fn(req, res).catch((err) => {
@@ -106,7 +141,7 @@ app.put('/api/settings', (req, res) => {
   const allowed = [
     'poll_interval_minutes', 'backfill_days', 'model', 'timezone', 'batch_size', 'auto_sync',
     'slack_user_id_override', 'min_confidence', 'show_completed', 'show_miscellaneous',
-    'watch_priority_people',
+    'watch_priority_people', 'stale_after_days', 'sort_mode',
   ];
   const patch = {};
   for (const key of allowed) {

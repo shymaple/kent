@@ -226,6 +226,14 @@ main.board-main { margin: 0; max-width: none; }
 .card-title { font-weight: 550; margin-bottom: 6px; line-height: 1.35; overflow-wrap: anywhere; }
 .card-desc { color: var(--ink-soft); font-size: 12.5px; margin-bottom: 8px; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11.5px; }
+/* Insertion marker while dragging a card into place. */
+.drop-before { position: relative; }
+.drop-before::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -5px;
+  height: 2px; border-radius: 2px; background: var(--accent);
+}
+.replied { color: var(--low); font-weight: 600; }
+
 .card-foot {
   display: flex; align-items: center; gap: 8px; margin-top: 8px;
   font-size: 11.5px; color: var(--ink-faint);

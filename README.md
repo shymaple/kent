@@ -47,6 +47,10 @@ On a real workspace sync: **69 messages → 15 candidates → 14 rejected → 1 
 - **Reply from the board.** Finish a task, generate a short reply in your own
   writing style, and post it straight into the original Slack thread — after you
   press Send, never before.
+- **Finishing a task offers the reply.** Drag a card into Completed and Kent
+  drafts a short update for whoever asked — you read it and press Send, or don't.
+- **Snooze** a card until a date, and see at a glance which in-progress work has
+  gone quiet.
 - **⌘K** search, **⌘⇧N** new task, **Esc** closes anything.
 
 Board columns start as **Open → In Progress → In Review → Completed**, drag and
@@ -101,7 +105,7 @@ prompts/
 ```bash
 npm start                          # server + UI on http://localhost:4317
 npm run dev                        # server --watch + Vite dev server on :5317
-npm test                           # 81 tests, no network and no model calls
+npm test                           # 114 tests, no network and no model calls
 npm run probe                      # verify the Slack token, list your conversations
 npm run dry-run <#channel> [days]  # full pipeline over a real channel, writes nothing
 npm run triage-check               # grade the prompt against labelled fixtures
@@ -144,7 +148,7 @@ Full detail, including the trust model and how to report a vulnerability:
 
 ## Contributing
 
-Before opening a PR, run `npm test` (81 tests, no network and no model calls) and
+Before opening a PR, run `npm test` (114 tests, no network and no model calls) and
 `npm run triage-check`. If you touch `prompts/classify.md`, the triage score is the
 thing to watch — it's what keeps Kent from becoming another noisy inbox.
 

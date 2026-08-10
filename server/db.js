@@ -227,6 +227,8 @@ export const DEFAULT_SETTINGS = {
   batch_size: '15',
   auto_sync: 'true',
   min_confidence: '0.5',   // below this the model's "task" call is not trusted
+  stale_after_days: '7',   // untouched in an active list for this long = stalled
+  sort_mode: 'smart',      // smart = priority then due date; manual = drag order
   watch_priority_people: 'true',   // read everything they write, mention or not
   show_completed: 'true',
   show_miscellaneous: 'true',

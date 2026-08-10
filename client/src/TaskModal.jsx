@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Modal from './Modal.jsx';
 import TaskForm from './TaskForm.jsx';
@@ -10,7 +10,9 @@ const INTENTS = [
   { key: 'blocked', label: 'Blocked' },
 ];
 
-export default function TaskModal({ task, lists, templates = [], onClose, onSaved, onDeleted, onError }) {
+export default function TaskModal({
+  task, lists, templates = [], autoIntent, onClose, onSaved, onDeleted, onError,
+}) {
   const [draft, setDraft] = useState(() => ({ ...task }));
   const [dirty, setDirty] = useState(false);
   const [comments, setComments] = useState([]);
@@ -19,6 +21,9 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
   const [drafting, setDrafting] = useState(false);
   const [sendingId, setSendingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Declared before the effects that read it, not after.
+  const canReply = Boolean(task.channel_id && (task.thread_ts || task.message_ts));
 
   const loadComments = useCallback(async () => {
     try {
@@ -31,6 +36,15 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
   useEffect(() => {
     loadComments();
   }, [loadComments]);
+
+  // Opened by finishing a task: draft the reply straight away, so the only thing
+  // left to do is read it and press Send. Never sends on its own.
+  const drafted = useRef(false);
+  useEffect(() => {
+    if (!autoIntent || drafted.current || !canReply) return;
+    drafted.current = true;
+    generate(autoIntent);
+  }, [autoIntent]);
 
   function edit(next) {
     setDraft(next);
@@ -99,6 +113,23 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
     if (created) await sendToSlack(created);
   }
 
+  /** Snooze saves immediately - it's a decision, not a draft edit. */
+  async function snoozeUntil(date) {
+    try {
+      const saved = await api.updateTask(task.id, { snooze_until: date });
+      setDraft((d) => ({ ...d, snooze_until: saved.snooze_until }));
+      onSaved(saved);
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  function snooze(days) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    snoozeUntil(d.toISOString().slice(0, 10));
+  }
+
   async function remove() {
     try {
       await api.deleteTask(task.id);
@@ -107,8 +138,6 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
       onError(e.message);
     }
   }
-
-  const canReply = Boolean(task.channel_id && (task.thread_ts || task.message_ts));
 
   return (
     <Modal onClose={onClose} labelledBy="task-modal-title" wide>
@@ -150,6 +179,37 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
             ))}
           </div>
 
+          <div className="field">
+            <label>Snooze — hide until</label>
+            <div className="row">
+              {[
+                { label: 'Tomorrow', days: 1 },
+                { label: 'Next week', days: 7 },
+              ].map((o) => (
+                <button key={o.label} className="small" onClick={() => snooze(o.days)}>
+                  {o.label}
+                </button>
+              ))}
+              <input
+                type="date"
+                value={draft.snooze_until ?? ''}
+                onChange={(e) => snoozeUntil(e.target.value || null)}
+                style={{ width: 'auto' }}
+                aria-label="Snooze until"
+              />
+              {task.snooze_until && (
+                <button className="ghost small" onClick={() => snoozeUntil(null)}>
+                  Unsnooze
+                </button>
+              )}
+            </div>
+            {task.is_snoozed && (
+              <p className="hint" style={{ marginTop: 6 }}>
+                Hidden from the board until {task.snooze_until}.
+              </p>
+            )}
+          </div>
+
           <div className="row">
             {confirmDelete ? (
               <>
@@ -176,6 +236,14 @@ export default function TaskModal({ task, lists, templates = [], onClose, onSave
 
         <aside className="modal-side">
           <h3>Activity</h3>
+
+          {autoIntent === 'done' && (
+            <div className="banner" style={{ marginBottom: 12 }}>
+              {canReply
+                ? <>Task done — here's a reply for <strong>{task.assigner_name ?? 'the thread'}</strong>. Nothing is sent until you press Send.</>
+                : <>Task done. This one didn't come from Slack, so there's no thread to reply to.</>}
+            </div>
+          )}
 
           {comments.length === 0 && <p className="hint">No comments yet.</p>}
 

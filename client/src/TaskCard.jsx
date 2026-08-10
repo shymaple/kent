@@ -51,14 +51,31 @@ export default function TaskCard({ task, onOpen, onDragStart, onDragEnd, draggin
           <span className={`chip ${dueChipClass(days)}`}>{dueLabel(task.due_date, days)}</span>
         )}
         {task.category && task.category !== 'other' && <span className="chip">{task.category}</span>}
+        {task.stale_days != null && (
+          <span className="chip medium" title="Untouched while in progress">
+            idle {task.stale_days}d
+          </span>
+        )}
+        {task.is_snoozed && (
+          <span className="chip" title={`Hidden until ${task.snooze_until}`}>
+            💤 {task.snooze_until}
+          </span>
+        )}
       </div>
 
-      {(task.assigner_name || linkCount > 0 || task.permalink) && (
+      {(task.assigner_name || linkCount > 0 || task.permalink || task.comment_count > 0) && (
         <div className="card-foot">
           {task.assigner_name && <span title={`from ${task.assigner_name}`}>{task.assigner_name}</span>}
           <span style={{ flex: 1 }} />
+          {/* Whether the person who asked has been told is the thing you most
+              want to see without opening the card. */}
+          {task.replied_in_slack ? (
+            <span className="replied" title="You replied in the Slack thread">✓ replied</span>
+          ) : (
+            task.comment_count > 0 && <span title={`${task.comment_count} comment(s)`}>💬 {task.comment_count}</span>
+          )}
           {linkCount > 0 && <span title={`${linkCount} link(s)`}>🔗 {linkCount}</span>}
-          {task.permalink && <span title="From Slack">💬</span>}
+          {task.permalink && <span title="From Slack">↗</span>}
         </div>
       )}
     </article>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Board from './Board.jsx';
 import Inbox from './Inbox.jsx';
@@ -28,9 +28,23 @@ export default function App() {
   const [openTaskId, setOpenTaskId] = useState(null);
   const [newTaskNonce, setNewTaskNonce] = useState(0);
 
+  const lastSeenRun = useRef(null);
+
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await api.syncStatus());
+      const next = await api.syncStatus();
+      setStatus(next);
+
+      // A background sync finished since we last looked, so what's on screen is
+      // stale. Reload it rather than waiting for the user to press Sync now -
+      // the point of auto-sync is that they shouldn't have to. Tracked in a ref
+      // so this stays a plain side effect, not one hidden in a state updater.
+      const run = next.last_run;
+      if (run?.finished_at && run.id !== lastSeenRun.current) {
+        const first = lastSeenRun.current === null;
+        lastSeenRun.current = run.id;
+        if (!first && run.inboxed > 0) setRefreshKey((k) => k + 1);
+      }
     } catch (e) {
       setError(e.message);
     }
@@ -48,8 +62,14 @@ export default function App() {
     loadStatus();
     loadSettings();
     // Polls our own local server, not Slack and not the model.
-    const t = setInterval(loadStatus, 20_000);
-    return () => clearInterval(t);
+    const t = setInterval(loadStatus, 15_000);
+    // Coming back to the tab is the moment a stale board is most obvious.
+    const onFocus = () => loadStatus();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [loadStatus, loadSettings, refreshKey]);
 
   useEffect(() => {
