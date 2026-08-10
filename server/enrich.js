@@ -6,6 +6,7 @@
  * the prompt short and makes the important behaviour testable.
  */
 import { extractLinks } from './prefilter.js';
+import { parseDeadline } from './deadline.js';
 
 /** YYYY-MM-DD for a Date, in the given IANA timezone. */
 export function localDateString(date, timezone) {
@@ -41,6 +42,13 @@ export function enrich(candidate, verdict, ctx = {}) {
   // A deadline already in the past is a parsing artefact, not a deadline.
   if (dueDate && dueDate < localDateString(candidate.sentAt ?? new Date(), timezone)) {
     dueDate = null;
+  }
+
+  // The model reads a date it recognises as a deadline, but misses ones that are
+  // grammatically buried - "before the review on Thursday" came back null.
+  // Weekday arithmetic is a rule, so fall back to parsing it here.
+  if (!dueDate) {
+    dueDate = parseDeadline(candidate.text, candidate.sentAt ?? new Date(), timezone);
   }
 
   // Priority people win over the model, always.

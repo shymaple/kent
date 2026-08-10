@@ -68,7 +68,7 @@ count for the last run, so you can watch it stay honest.
 
 Rules that don't need judgement never reach the prompt: priority-people escalation,
 broadcast demotion, link extraction and deadline sanity are all plain code in
-`server/enrich.js`. `prompts/classify.md` is about twenty lines, and
+`server/enrich.js` and `server/deadline.js`. `prompts/classify.md` is about twenty lines, and
 `npm run triage-check` grades it against labelled fixtures so a "small tweak"
 can't quietly wreck it.
 
@@ -81,6 +81,7 @@ server/
   prefilter.js   deterministic candidate detection  ← the cost control
   classify.js    batched `claude -p` calls + JSON validation
   enrich.js      priority overrides, links, deadline sanity
+  deadline.js    weekday/relative date parsing, as a fallback for the model
   render.js      Slack markup → readable text (<@U123> → @Name)
   slack.js       Slack Web API (fetch, no SDK)
   sync.js        the poll loop

@@ -15,7 +15,8 @@ One exception: if `from_priority_person` is true, the sender is someone whose re
 Fields:
 - `title` — imperative, max 8 words, no names or @handles.
 - `description` — one sentence of context, or null if the title says it all.
-- `due_date` — only if a date is stated or clearly implied. Resolve relative wording ("tomorrow", "by Friday", "EOD") against `sent_at` in the message's timezone. Output `YYYY-MM-DD`. Otherwise null. Never guess.
+- `due_date` — only if a date is stated or clearly implied. Resolve relative wording ("tomorrow", "by Friday", "EOD", "end of month") against `sent_at` in the message's timezone. Output `YYYY-MM-DD`. Otherwise null. Never invent a date that isn't there.
+  A day name counts even when it's buried in a phrase: "before the review on Thursday" is due that Thursday. A weekday means its next occurrence on or after `sent_at`; "next Thursday" means the week after that.
 - `priority` — high = explicit urgency, blocks others, or due within 2 days. low = optional, nice-to-have, or broadcast to everyone. medium = the rest.
 - `confidence` — 0.0-1.0 that this is real work assigned to the user. Below 0.5 when unsure.
 

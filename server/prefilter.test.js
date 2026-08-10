@@ -243,6 +243,29 @@ test('broadcasts are demoted to low and labelled', () => {
   assert.equal(out.category, 'broadcast');
 });
 
+test('a deadline the model missed is recovered from the text', () => {
+  const out = enrich(
+    {
+      text: 'we need the pricing page updated before the review on Thursday',
+      sentAt: new Date('2026-08-08T10:00:00Z'),   // Saturday
+      reason: 'priority_person',
+      isBroadcast: false,
+    },
+    { title: 'Update pricing page', priority: 'high', dueDate: null, category: 'other', confidence: 0.9, description: null },
+    { timezone: 'UTC' }
+  );
+  assert.equal(out.dueDate, '2026-08-13');
+});
+
+test('a deadline the model did find is left alone', () => {
+  const out = enrich(
+    { text: 'ship it by Friday', sentAt: new Date('2026-08-08T10:00:00Z'), reason: 'mention', isBroadcast: false },
+    { title: 'Ship it', priority: 'high', dueDate: '2026-08-14', category: 'other', confidence: 0.9, description: null },
+    { timezone: 'UTC' }
+  );
+  assert.equal(out.dueDate, '2026-08-14', 'the model keeps precedence when it answered');
+});
+
 test('a due date before the message date is dropped', () => {
   const out = enrich(
     { text: 'do it', sentAt: new Date('2026-08-05T10:00:00Z'), reason: 'mention', isBroadcast: false },
