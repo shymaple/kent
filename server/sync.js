@@ -297,8 +297,12 @@ export async function runSync({ onLog = () => {}, classifier = classifyBatch } =
         // these messages unseen and hold their channel cursor back, so the next
         // sync retries them once the CLI is healthy again.
         for (const c of batch) failedIds.add(c.id);
-        stats.errors.push(`classify: ${err.message}`);
-        onLog(`classify failed for ${batch.length} message(s), will retry next sync: ${err.message}`);
+        // The terminal gets the cause; the recorded error stays human-readable
+        // because it surfaces in the UI as the last sync's status.
+        stats.errors.push(err.userMessage ?? 'Classification failed; will retry.');
+        onLog(
+          `classify failed for ${batch.length} message(s), will retry next sync: ${err.detail ?? err.message}`
+        );
       }
     }
     stats.retrying = failedIds.size;

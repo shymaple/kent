@@ -38,6 +38,7 @@ const task = {
   channel_id: 'C1',
   channel_name: 'eng',
   message_ts: '1700000000.000100',
+  permalink: 'https://example.slack.com/archives/C1/p1700000000000100',
   assigner_name: 'Alex',
   comment_count: 2,
   replied_in_slack: true,
@@ -54,7 +55,7 @@ const screens = [
   ['Inbox', <Inbox refreshKey={0} onError={noop} onChange={noop} />],
   ['Settings', <Settings onError={noop} onChange={noop} />],
   ['CommandBar', <CommandBar onPick={noop} onClose={noop} onError={noop} />],
-  ['TaskModal', <TaskModal task={task} lists={lists} onClose={noop} onSaved={noop} onDeleted={noop} onError={noop} />],
+  ['TaskModal', <TaskModal task={task} onClose={noop} onSaved={noop} onDeleted={noop} onError={noop} />],
   ['TaskCard', <TaskCard task={task} onOpen={noop} />],
   ['TaskCard (broadcast)', <TaskCard task={{ ...task, is_broadcast: true, priority: 'low' }} onOpen={noop} />],
 ];
@@ -68,6 +69,45 @@ for (const [name, element] of screens) {
     failed++;
     console.error(`  ✗ ${name}: ${err.message}`);
   }
+}
+
+// The card preview must link back into Slack; that is the one thing people
+// reach for most and it is easy to lose in a card rewrite.
+const card = renderToString(<TaskCard task={task} onOpen={noop} />);
+if (!card.includes(task.permalink) || !card.includes('Slack')) {
+  failed++;
+  console.error('  ✗ the card preview lost its Slack link');
+} else {
+  console.log('  ✓ card preview links to Slack');
+}
+
+// The modal titles the task once, in the header, and that header is editable.
+const modalHtml = renderToString(
+  <TaskModal task={task} onClose={noop} onSaved={noop} onDeleted={noop} onError={noop} />
+);
+// One editable title, in the header — not a header heading plus a Title field
+// in the body, which is what it used to be.
+const titleInputs = (modalHtml.match(/class="title-input"/g) || []).length;
+const titleLabels = (modalHtml.match(/>Title</g) || []).length;
+if (titleInputs !== 1 || titleLabels !== 0) {
+  failed++;
+  console.error(
+    `  ✗ expected one editable header title and no Title field; found ${titleInputs} input(s), ${titleLabels} label(s)`
+  );
+} else {
+  console.log('  ✓ modal has a single editable title in its header');
+}
+if (modalHtml.includes('>List<')) {
+  failed++;
+  console.error('  ✗ the list dropdown is back in the task modal');
+} else {
+  console.log('  ✓ no list dropdown in the modal');
+}
+if (modalHtml.includes('>Save<')) {
+  failed++;
+  console.error('  ✗ a Save button came back; fields are supposed to autosave');
+} else {
+  console.log('  ✓ no Save button — fields autosave');
 }
 
 // A broadcast card must be visibly different, since that tint is the only thing

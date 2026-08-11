@@ -76,7 +76,20 @@ export default function TaskCard({ task, onOpen, lifted = false }) {
             task.comment_count > 0 && <span title={`${task.comment_count} comment(s)`}>💬 {task.comment_count}</span>
           )}
           {linkCount > 0 && <span title={`${linkCount} link(s)`}>🔗 {linkCount}</span>}
-          {task.permalink && <span title="From Slack">↗</span>}
+          {task.permalink && (
+            // stopPropagation, or opening Slack would also open the modal behind it.
+            <a
+              className="card-link"
+              href={task.permalink}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open in Slack${task.channel_name ? ` · ${task.channel_name}` : ''}`}
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              ↗ Slack
+            </a>
+          )}
         </div>
       )}
     </article>

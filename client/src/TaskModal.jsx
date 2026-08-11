@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Modal from './Modal.jsx';
-import TaskForm from './TaskForm.jsx';
+import TaskFields from './TaskFields.jsx';
 import { dueChipClass, dueLabel } from './TaskCard.jsx';
 
 const INTENTS = [
@@ -10,12 +10,21 @@ const INTENTS = [
   { key: 'blocked', label: 'Blocked' },
 ];
 
+/** Keeps header items to a length the row can actually fit. */
+const truncate = (text, max) => {
+  const value = String(text ?? '');
+  return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value;
+};
+
 export default function TaskModal({
-  task, lists, templates = [], autoIntent, onClose, onSaved, onDeleted, onError,
+  task, templates = [], autoIntent, onClose, onSaved, onDeleted, onError,
 }) {
-  const [draft, setDraft] = useState(() => ({ ...task }));
-  const [dirty, setDirty] = useState(false);
   const [comments, setComments] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  // The title is the one field held locally while typing, so each keystroke
+  // isn't a write; it commits on blur, Enter, or reverts on Escape.
+  const [title, setTitle] = useState(task.title);
   const [composer, setComposer] = useState('');
   const [variants, setVariants] = useState([]);
   const [drafting, setDrafting] = useState(false);
@@ -46,25 +55,20 @@ export default function TaskModal({
     generate(autoIntent);
   }, [autoIntent]);
 
-  function edit(next) {
-    setDraft(next);
-    setDirty(true);
-  }
-
-  async function save() {
+  /**
+   * Every field writes as soon as it is left, so there is no Save button and no
+   * way to lose an edit by closing the dialog.
+   */
+  async function commit(patch) {
+    setSaving(true);
     try {
-      const saved = await api.updateTask(task.id, {
-        title: draft.title,
-        description: draft.description,
-        priority: draft.priority,
-        due_date: draft.due_date || null,
-        category: draft.category,
-        list_id: draft.list_id,
-      });
-      setDirty(false);
+      const saved = await api.updateTask(task.id, patch);
       onSaved(saved);
+      setSavedAt(Date.now());
     } catch (e) {
       onError(e.message);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -113,16 +117,7 @@ export default function TaskModal({
     if (created) await sendToSlack(created);
   }
 
-  /** Snooze saves immediately - it's a decision, not a draft edit. */
-  async function snoozeUntil(date) {
-    try {
-      const saved = await api.updateTask(task.id, { snooze_until: date });
-      setDraft((d) => ({ ...d, snooze_until: saved.snooze_until }));
-      onSaved(saved);
-    } catch (e) {
-      onError(e.message);
-    }
-  }
+  const snoozeUntil = (date) => commit({ snooze_until: date });
 
   function snooze(days) {
     const d = new Date();
@@ -141,16 +136,56 @@ export default function TaskModal({
 
   return (
     <Modal onClose={onClose} labelledBy="task-modal-title" wide>
-      <header className="modal-head">
-        <h2 id="task-modal-title">{draft.title || 'Task'}</h2>
-        <button className="ghost" onClick={onClose} aria-label="Close">
-          ✕
-        </button>
+      {/* Title takes half the header; who it came from and where it lives fill
+          the rest, each truncated so the row can never wrap or push the close
+          button off the edge. */}
+      <header className="modal-head task-head">
+        <input
+          id="task-modal-title"
+          className="title-input"
+          value={title}
+          maxLength={120}
+          placeholder="Task title"
+          aria-label="Task title"
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={() => {
+            const next = title.trim();
+            if (!next) return setTitle(task.title);
+            if (next !== task.title) commit({ title: next });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') {
+              setTitle(task.title);
+              e.currentTarget.blur();
+            }
+          }}
+        />
+
+        <div className="head-meta">
+          {task.assigner_name && (
+            <span className="head-from" title={`Asked by ${task.assigner_name}`}>
+              from <strong>{truncate(task.assigner_name, 22)}</strong>
+            </span>
+          )}
+          {task.permalink && (
+            <a className="link" href={task.permalink} target="_blank" rel="noreferrer">
+              ↗ Slack
+            </a>
+          )}
+          {task.channel_name && (
+            <span className="head-channel" title={task.channel_name}>
+              {truncate(task.channel_name, 24)}
+            </span>
+          )}
+        </div>
+
+        <button className="ghost" onClick={onClose} aria-label="Close">✕</button>
       </header>
 
       <div className="modal-body">
         <section className="modal-main">
-          <TaskForm value={draft} onChange={edit} lists={lists} />
+          <TaskFields task={task} onCommit={commit} />
 
           {task.source_text && (
             <div className="field">
@@ -159,48 +194,33 @@ export default function TaskModal({
             </div>
           )}
 
-          <div className="card-meta" style={{ marginBottom: 14 }}>
-            {task.due_date && (
-              <span className={`chip ${dueChipClass(task.days_until_due)}`}>
-                {dueLabel(task.due_date, task.days_until_due)}
-              </span>
-            )}
-            {task.assigner_name && <span className="chip">from {task.assigner_name}</span>}
-            {task.channel_name && <span className="chip">{task.channel_name}</span>}
-            {task.permalink && (
-              <a className="chip" href={task.permalink} target="_blank" rel="noreferrer">
-                ↗ Open in Slack
-              </a>
-            )}
-            {task.links?.map((l) => (
-              <a className="chip" key={l.url} href={l.url} target="_blank" rel="noreferrer">
-                ↗ {l.label}
-              </a>
-            ))}
-          </div>
+          {task.links?.length > 0 && (
+            <div className="field">
+              <label>Attachments and links</label>
+              <div className="link-list">
+                {task.links.map((l) => (
+                  <a className="link" key={l.url} href={l.url} target="_blank" rel="noreferrer" title={l.url}>
+                    ↗ {truncate(l.label, 46)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="field">
             <label>Snooze — hide until</label>
             <div className="row">
-              {[
-                { label: 'Tomorrow', days: 1 },
-                { label: 'Next week', days: 7 },
-              ].map((o) => (
-                <button key={o.label} className="small" onClick={() => snooze(o.days)}>
-                  {o.label}
-                </button>
-              ))}
+              <button className="small" onClick={() => snooze(1)}>Tomorrow</button>
+              <button className="small" onClick={() => snooze(7)}>Next week</button>
               <input
                 type="date"
-                value={draft.snooze_until ?? ''}
+                value={task.snooze_until ?? ''}
                 onChange={(e) => snoozeUntil(e.target.value || null)}
                 style={{ width: 'auto' }}
                 aria-label="Snooze until"
               />
               {task.snooze_until && (
-                <button className="ghost small" onClick={() => snoozeUntil(null)}>
-                  Unsnooze
-                </button>
+                <button className="ghost small" onClick={() => snoozeUntil(null)}>Unsnooze</button>
               )}
             </div>
             {task.is_snoozed && (
@@ -214,23 +234,16 @@ export default function TaskModal({
             {confirmDelete ? (
               <>
                 <span className="chip high">Delete this task?</span>
-                <button className="danger" onClick={remove}>
-                  Yes, delete
-                </button>
-                <button className="ghost" onClick={() => setConfirmDelete(false)}>
-                  Cancel
-                </button>
+                <button className="danger" onClick={remove}>Yes, delete</button>
+                <button className="ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
               </>
             ) : (
-              <button className="ghost" onClick={() => setConfirmDelete(true)}>
-                Delete task
-              </button>
+              <button className="ghost" onClick={() => setConfirmDelete(true)}>Delete task</button>
             )}
             <div style={{ flex: 1 }} />
-            {dirty && <span className="chip medium">Unsaved changes</span>}
-            <button className="primary" onClick={save} disabled={!dirty}>
-              Save
-            </button>
+            <span className="save-state">
+              {saving ? 'Saving…' : savedAt ? 'Saved' : 'Changes save as you go'}
+            </span>
           </div>
         </section>
 

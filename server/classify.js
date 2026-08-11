@@ -28,6 +28,49 @@ export function readPrompt() {
   return readFileSync(PROMPT_PATH, 'utf8');
 }
 
+/**
+ * Turn a CLI failure into something with a cause attached.
+ *
+ * On failure the CLI usually still prints its JSON envelope to *stdout* and
+ * exits non-zero, so reading only stderr threw the reason away and left us
+ * echoing the whole command line — useless to a user and leaking internals.
+ *
+ * Returns an Error carrying `userMessage` (safe to show) and `detail` (for the
+ * terminal).
+ */
+function cliError(err, stdout, stderr, timeoutMs) {
+  let detail = stderr?.trim() || '';
+
+  if (!detail && stdout) {
+    try {
+      const envelope = JSON.parse(stdout);
+      detail = envelope.result || envelope.error || '';
+    } catch {
+      detail = String(stdout).trim().slice(0, 500);
+    }
+  }
+  if (!detail) detail = err.message;
+
+  const lower = detail.toLowerCase();
+  let userMessage;
+  if (err.killed) {
+    userMessage = `Claude took longer than ${Math.round(timeoutMs / 1000)}s to answer. It will be retried on the next sync.`;
+  } else if (lower.includes('usage limit') || lower.includes('rate limit') || lower.includes('429')) {
+    userMessage = 'Claude is rate limited right now. Kent will retry shortly.';
+  } else if (lower.includes('not logged in') || lower.includes('unauthor') || lower.includes('authentication')) {
+    userMessage = 'Claude Code is not signed in. Run `claude` in a terminal and log in.';
+  } else if (lower.includes('enoent')) {
+    userMessage = 'The `claude` command was not found. Install Claude Code and make sure it is on your PATH.';
+  } else {
+    userMessage = 'Claude could not be reached. Check the terminal running Kent for the reason.';
+  }
+
+  const error = new Error(`claude CLI failed: ${detail}`);
+  error.userMessage = userMessage;
+  error.detail = detail;
+  return error;
+}
+
 /** Run `claude -p` and return its result text. */
 function runClaude(prompt, { model, timeoutMs = 300_000 } = {}) {
   // Slack message text goes into this prompt, so treat it as untrusted input:
@@ -54,14 +97,7 @@ function runClaude(prompt, { model, timeoutMs = 300_000 } = {}) {
       args,
       { cwd: getScratchDir(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        if (err) {
-          // execFile reports a timeout kill via `killed`, with empty stderr -
-          // say so plainly instead of a bare "Command failed".
-          const detail = err.killed
-            ? `timed out after ${Math.round(timeoutMs / 1000)}s`
-            : stderr?.trim() || err.message;
-          return reject(new Error(`claude CLI failed: ${detail}`));
-        }
+        if (err) return reject(cliError(err, stdout, stderr, timeoutMs));
         try {
           const envelope = JSON.parse(stdout);
           if (envelope.is_error) return reject(new Error(`claude returned an error: ${envelope.result}`));

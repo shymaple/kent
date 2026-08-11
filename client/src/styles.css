@@ -421,6 +421,53 @@ body.modal-open main { overflow: hidden; }
 }
 .modal-head h2 { margin: 0; font-size: 16px; flex: 1; overflow-wrap: anywhere; }
 
+/* Half the row is the title; the rest is context, and nothing may wrap or push
+   the close button out of reach. */
+.task-head { gap: 10px; }
+.task-head .title-input {
+  flex: 0 1 50%;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 650;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+}
+.task-head .title-input:hover { border-color: var(--line); }
+.task-head .title-input:focus { border-color: var(--accent); background: var(--panel); }
+
+.head-meta {
+  display: flex; align-items: center; gap: 10px;
+  flex: 1 1 auto; min-width: 0; justify-content: flex-end;
+  font-size: 12.5px; color: var(--ink-soft); white-space: nowrap;
+}
+.head-from, .head-channel { overflow: hidden; text-overflow: ellipsis; }
+.head-from strong { color: var(--ink); font-weight: 600; }
+.head-channel { color: var(--ink-faint); }
+
+/* One treatment for every link in the app, so a link always looks like a link. */
+.link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.link:hover { text-decoration: underline; }
+.link-list { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+a.card-link { color: var(--accent); text-decoration: none; font-weight: 550; }
+a.card-link:hover { text-decoration: underline; }
+
+.save-state { font-size: 12px; color: var(--ink-faint); }
+
+@media (max-width: 700px) {
+  .task-head { flex-wrap: wrap; }
+  .task-head .title-input { flex: 1 1 100%; }
+  .head-meta { justify-content: flex-start; }
+}
+
 .modal-body { display: grid; grid-template-columns: 1.35fr 1fr; gap: 0; }
 .modal-body.single { display: block; padding: 18px; }
 .modal-main { padding: 18px; min-width: 0; }

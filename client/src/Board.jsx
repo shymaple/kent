@@ -456,7 +456,6 @@ export default function Board({
       {openTask && (
         <TaskModal
           task={openTask}
-          lists={lists}
           templates={settings?.comment_templates ?? []}
           autoIntent={autoIntent}
           onClose={() => {

@@ -117,10 +117,19 @@ const parseTask = (row) => {
   };
 };
 
-/** Wrap an async handler so a rejection becomes a clean 500 instead of a hang. */
+/**
+ * Wrap an async handler so a rejection becomes a clean 500 instead of a hang.
+ *
+ * The full error goes to the terminal; the browser gets either a message we
+ * wrote deliberately for a human (`userMessage`) or a generic line. Raw
+ * internals — stack traces, SQL, shell command lines — are never worth showing
+ * and tell an attacker more than they tell the user.
+ */
 const h = (fn) => (req, res) => fn(req, res).catch((err) => {
-  console.error(`[api] ${req.method} ${req.path}:`, err.message);
-  res.status(500).json({ error: err.message });
+  console.error(`[api] ${req.method} ${req.path}:`, err.detail ?? err.stack ?? err.message);
+  res.status(500).json({
+    error: err.userMessage ?? 'Something went wrong. Check the terminal running Kent for details.',
+  });
 });
 
 // ---------------------------------------------------------------- settings
@@ -526,7 +535,10 @@ app.post('/api/tasks/:id/comment-draft', h(async (req, res) => {
     });
     res.json({ variants });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    console.error('[api] comment-draft:', err.detail ?? err.message);
+    res.status(502).json({
+      error: err.userMessage ?? 'Could not draft a reply just now. Please try again.',
+    });
   }
 }));
 

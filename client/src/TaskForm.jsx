@@ -15,6 +15,7 @@ export default function TaskForm({ value, onChange, lists = [], showList = true,
           id="task-title"
           autoFocus={autoFocus}
           value={value.title ?? ''}
+          maxLength={120}
           placeholder="What needs doing?"
           onChange={(e) => set({ title: e.target.value })}
         />
@@ -25,6 +26,7 @@ export default function TaskForm({ value, onChange, lists = [], showList = true,
         <textarea
           id="task-desc"
           value={value.description ?? ''}
+          maxLength={2000}
           placeholder="Any detail worth keeping"
           onChange={(e) => set({ description: e.target.value })}
         />
