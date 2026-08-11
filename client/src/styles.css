@@ -44,12 +44,24 @@
 
 * { box-sizing: border-box; }
 
+/* The app owns the viewport: header at a fixed height, content taking whatever
+   is left. Without this the board is only as tall as its fullest column, so on
+   a big screen the horizontal scroll strip ends up stranded mid-page with dead
+   space beneath it. */
+html, body { height: 100%; }
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 button {
@@ -91,8 +103,7 @@ label { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 
 .topbar {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
+  flex: 0 0 auto;      /* fixed band; sticky is unnecessary once main scrolls */
   z-index: 20;
 }
 /* Inner wrapper keeps the header aligned with the centred page content. */
@@ -125,13 +136,27 @@ label { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 
 .status-note.err { color: var(--high); }
 
 main {
+  flex: 1 1 auto;
+  min-height: 0;              /* lets the flex child actually shrink and scroll */
+  overflow-y: auto;
   max-width: var(--page-width);
+  width: 100%;
   margin: 0 auto;
   padding: 22px 24px 60px;
 }
+
 /* The board is left-aligned rather than centred, so columns start at the edge
-   and extra width becomes more board instead of more whitespace. */
-main.board-main { margin: 0; max-width: none; }
+   and extra width becomes more board instead of more whitespace. It also owns
+   the full remaining height, so the horizontal scrollbar lands at the bottom of
+   the window and a two-finger swipe works anywhere over the board. */
+main.board-main {
+  margin: 0;
+  max-width: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 12px;
+}
 .empty { color: var(--ink-faint); padding: 32px; text-align: center; }
 .banner {
   background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
@@ -140,15 +165,31 @@ main.board-main { margin: 0; max-width: none; }
 
 /* ---------------------------------------------------------------- board */
 
-/* Trello-style: left-aligned fixed columns that scroll sideways, never stretch. */
+/* Trello-style: left-aligned fixed-width columns that scroll sideways. Columns
+   stretch to the board's full height so the whole area is grabbable, rather
+   than only the few hundred pixels the tallest column happened to need. */
 .board {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: auto;
-  padding-bottom: 10px;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  overscroll-behavior-x: contain;   /* no accidental browser back-swipe */
 }
-.board-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+/* Always-visible scrollbar: a hidden one makes the board look unscrollable. */
+.board::-webkit-scrollbar { height: 10px; }
+.board::-webkit-scrollbar-thumb {
+  background: var(--line); border-radius: 5px; border: 2px solid var(--bg);
+}
+.board::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+.board-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 14px; flex-wrap: wrap; flex: 0 0 auto;
+}
 .toggle {
   display: inline-flex; align-items: center; gap: 6px; margin: 0;
   font-size: 12.5px; color: var(--ink-soft); cursor: pointer;
@@ -165,12 +206,17 @@ main.board-main { margin: 0; max-width: none; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 10px;
-  max-height: calc(100vh - 210px);
+  height: 100%;          /* fills the board, so the whole column is a drop target */
+  min-height: 0;
   transition: border-color 0.12s, background 0.12s;
 }
 .column.drag-over { border-color: var(--accent); background: var(--panel); }
-.column-scroll { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 40px; }
-.column.add-list { background: transparent; border-style: dashed; }
+.column-scroll { overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; min-height: 0; }
+/* A full-height dashed placeholder would dominate an empty board. */
+.column.add-list {
+  background: transparent; border-style: dashed;
+  height: auto; align-self: flex-start;
+}
 
 .column-head {
   display: flex; align-items: center; gap: 6px;
@@ -199,10 +245,26 @@ main.board-main { margin: 0; max-width: none; }
 }
 .column-add:hover { color: var(--ink); }
 
-/* One scrollable stack on small screens. */
+/* On a wide screen the columns can afford a little more room; on a laptop they
+   stay at the width that fits four across. Capped so a very wide monitor gives
+   you more columns rather than wider ones. */
+@media (min-width: 1600px) { :root { --column-width: 330px; } }
+@media (min-width: 2200px) { :root { --column-width: 360px; } }
+
+/* One scrollable stack on small screens: the board scrolls vertically instead. */
 @media (max-width: 900px) {
-  .board { flex-direction: column; overflow-x: visible; }
-  .column { flex: 1 1 auto; width: 100%; max-width: 100%; max-height: none; }
+  main.board-main { overflow-y: auto; }
+  .board {
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: visible;
+    overflow-y: visible;
+  }
+  .column {
+    flex: 0 0 auto; width: 100%; max-width: 100%;
+    height: auto; max-height: 70vh;
+  }
+  .column.add-list { align-self: stretch; }
 }
 
 .card {
@@ -332,6 +394,8 @@ main.board-main { margin: 0; max-width: none; }
 .problems code { font-size: 12px; }
 
 /* ---------------------------------------------------------------- modals */
+
+body.modal-open main { overflow: hidden; }
 
 .backdrop {
   position: fixed; inset: 0; z-index: 60;

@@ -13,8 +13,11 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
   useEffect(() => {
     returnFocusTo.current = document.activeElement;
 
+    // `main` is the scrolling element now, not the window, so locking the body
+    // alone would leave the page scrolling behind the dialog.
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    document.body.classList.add('modal-open');
 
     // Focus the first sensible control so keyboard users start inside.
     const focusables = () =>
@@ -50,6 +53,7 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
     return () => {
       document.removeEventListener('keydown', onKeyDown, true);
       document.body.style.overflow = previousOverflow;
+      document.body.classList.remove('modal-open');
       returnFocusTo.current?.focus?.();
     };
   }, [onClose]);
