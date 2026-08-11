@@ -103,6 +103,25 @@ if (modalHtml.includes('>List<')) {
 } else {
   console.log('  ✓ no list dropdown in the modal');
 }
+// Opening a card must not drop straight into editing its title.
+if (modalHtml.includes('autofocus') || modalHtml.includes('data-autofocus')) {
+  failed++;
+  console.error('  ✗ the task modal grabs focus into a field on open');
+} else {
+  console.log('  ✓ opening a card does not start editing the title');
+}
+
+// Slack is the most-used action, so it sits last in the header row.
+const headMeta = modalHtml.slice(modalHtml.indexOf('head-meta'));
+const slackAt = headMeta.indexOf('Slack');
+const channelAt = headMeta.indexOf(task.channel_name);
+if (slackAt === -1 || channelAt === -1 || slackAt < channelAt) {
+  failed++;
+  console.error('  ✗ the Slack link should come last in the header');
+} else {
+  console.log('  ✓ Slack link sits last in the header row');
+}
+
 if (modalHtml.includes('>Save<')) {
   failed++;
   console.error('  ✗ a Save button came back; fields are supposed to autosave');

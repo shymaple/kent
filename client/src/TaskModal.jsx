@@ -162,21 +162,23 @@ export default function TaskModal({
           }}
         />
 
+        {/* Slack sits last, nearest the close button: it is the thing reached
+            for most often, so it gets the shortest travel. */}
         <div className="head-meta">
           {task.assigner_name && (
-            <span className="head-from" title={`Asked by ${task.assigner_name}`}>
+            <span className="head-tag" title={`Asked by ${task.assigner_name}`}>
               from <strong>{truncate(task.assigner_name, 22)}</strong>
             </span>
           )}
-          {task.permalink && (
-            <a className="link" href={task.permalink} target="_blank" rel="noreferrer">
-              ↗ Slack
-            </a>
-          )}
           {task.channel_name && (
-            <span className="head-channel" title={task.channel_name}>
+            <span className="head-tag" title={task.channel_name}>
               {truncate(task.channel_name, 24)}
             </span>
+          )}
+          {task.permalink && (
+            <a className="head-tag link" href={task.permalink} target="_blank" rel="noreferrer">
+              ↗ Slack
+            </a>
           )}
         </div>
 

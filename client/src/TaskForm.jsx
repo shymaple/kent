@@ -14,6 +14,7 @@ export default function TaskForm({ value, onChange, lists = [], showList = true,
         <input
           id="task-title"
           autoFocus={autoFocus}
+          data-autofocus={autoFocus ? '' : undefined}
           value={value.title ?? ''}
           maxLength={120}
           placeholder="What needs doing?"

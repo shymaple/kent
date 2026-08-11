@@ -54,6 +54,7 @@ export default function CommandBar({ onPick, onClose, onError }) {
           id="command-input"
           ref={inputRef}
           className="command-input"
+          data-autofocus=""
           value={q}
           placeholder="Search tasks, messages, people, channels…"
           onChange={(e) => setQ(e.target.value)}

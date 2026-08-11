@@ -19,13 +19,17 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
     document.body.style.overflow = 'hidden';
     document.body.classList.add('modal-open');
 
-    // Focus the first sensible control so keyboard users start inside.
     const focusables = () =>
       [...(panelRef.current?.querySelectorAll(
         'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
       ) ?? [])].filter((el) => el.offsetParent !== null);
 
-    (focusables()[0] ?? panelRef.current)?.focus();
+    // Focus the dialog itself, not its first control. Grabbing the first
+    // control put the task modal's title into edit mode the moment it opened,
+    // which is not what anyone asked for by clicking a card. A dialog that
+    // wants a field focused says so with [data-autofocus].
+    const wanted = panelRef.current?.querySelector('[data-autofocus]');
+    (wanted ?? panelRef.current)?.focus();
 
     function onKeyDown(e) {
       if (e.key === 'Escape') {
