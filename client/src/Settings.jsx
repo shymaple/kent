@@ -189,6 +189,9 @@ export default function Settings({ onError, onChange }) {
     save({ aliases });
   }
 
+  // Shown so "am I looking at the current build?" is answerable at a glance.
+  const build = typeof __BUILD__ === 'string' ? __BUILD__ : 'dev';
+
   return (
     <div className="settings">
       {/* ----------------------------------------------------------- Slack */}
@@ -678,6 +681,10 @@ export default function Settings({ onError, onChange }) {
           </button>
         </div>
       </section>
+
+      <p className="hint" style={{ textAlign: 'center', margin: 0 }}>
+        Kent · build {build}
+      </p>
     </div>
   );
 }

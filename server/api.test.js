@@ -169,6 +169,80 @@ test('moving into the done list stamps completion, moving out clears it', async 
   assert.equal(res.body.completed_at, null, 'reopening clears it');
 });
 
+test('a column can be reordered wholesale', async () => {
+  const { body: lists } = await api('/api/lists');
+  const listId = lists.find((l) => l.semantic === 'review').id;
+
+  const made = [];
+  for (const title of ['One', 'Two', 'Three']) {
+    const { body } = await api('/api/tasks', { method: 'POST', body: { title, list_id: listId } });
+    made.push(body);
+  }
+  const [one, two, three] = made;
+
+  // Drag the last card to the front.
+  const res = await api(`/api/lists/${listId}/reorder`, {
+    method: 'POST',
+    body: { ids: [three.id, one.id, two.id] },
+  });
+  assert.equal(res.body.ordered, 3);
+
+  const { body: after } = await api('/api/tasks');
+  const column = after
+    .filter((t) => t.list_id === listId)
+    .sort((a, b) => a.position - b.position)
+    .map((t) => t.title);
+  assert.deepEqual(column, ['Three', 'One', 'Two']);
+});
+
+test('reordering does not count as touching the work', async () => {
+  // Otherwise tidying the board would reset every idle counter on it.
+  const { body: lists } = await api('/api/lists');
+  const listId = lists.find((l) => l.semantic === 'review').id;
+  const { body: before } = await api('/api/tasks');
+  const target = before.find((t) => t.list_id === listId);
+
+  await api(`/api/lists/${listId}/reorder`, { method: 'POST', body: { ids: [target.id] } });
+
+  const { body: after } = await api('/api/tasks');
+  assert.equal(
+    after.find((t) => t.id === target.id).updated_at,
+    target.updated_at,
+    'updated_at must survive a reorder'
+  );
+});
+
+test('a reorder cannot drag tasks out of another list', async () => {
+  const { body: lists } = await api('/api/lists');
+  const review = lists.find((l) => l.semantic === 'review').id;
+  const backlog = lists.find((l) => l.semantic === 'backlog').id;
+
+  const { body: before } = await api('/api/tasks');
+  const outsider = before.find((t) => t.list_id === backlog);
+  const positions = before.filter((t) => t.list_id === backlog).map((t) => [t.id, t.position]);
+
+  // Passing a backlog id while reordering the review column must be ignored.
+  await api(`/api/lists/${review}/reorder`, { method: 'POST', body: { ids: [outsider.id] } });
+
+  const { body: after } = await api('/api/tasks');
+  assert.equal(after.find((t) => t.id === outsider.id).list_id, backlog, 'it stayed put');
+  assert.deepEqual(
+    after.filter((t) => t.list_id === backlog).map((t) => [t.id, t.position]),
+    positions,
+    'and its column was left alone'
+  );
+});
+
+test('reorder rejects nonsense', async () => {
+  const { body: lists } = await api('/api/lists');
+  const listId = lists[0].id;
+  assert.equal((await api(`/api/lists/${listId}/reorder`, { method: 'POST', body: {} })).status, 400);
+  assert.equal(
+    (await api('/api/lists/99999/reorder', { method: 'POST', body: { ids: [1] } })).status,
+    404
+  );
+});
+
 test('the security guards are live on the running server', async () => {
   const res = await fetch(`${BASE}/api/tasks`, { headers: { Origin: 'https://evil.example' } });
   assert.equal(res.status, 403, 'cross-origin requests are refused by the real server');

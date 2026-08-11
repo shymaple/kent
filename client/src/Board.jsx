@@ -100,36 +100,51 @@ export default function Board({
     if (id == null) return;
 
     const task = tasks.find((t) => t.id === id);
-    if (!task) return;
+    if (!task || beforeId === id) return;
 
     const sameList = task.list_id === listId;
-    if (sameList && (beforeId === id || beforeId === null)) return;
 
-    const patch = { list_id: listId };
+    // Dropping a card among its neighbours means "put it here", whatever the
+    // sort setting says. Requiring the user to find a Manual toggle first made
+    // dragging silently do nothing - so the drag itself switches the board over.
+    if (beforeId !== null || sameList) {
+      const column = ordered(boardTasks.filter((t) => t.list_id === listId && t.id !== id));
+      const at = beforeId ? column.findIndex((t) => t.id === beforeId) : column.length;
+      const next = [...column];
+      next.splice(at === -1 ? column.length : at, 0, { ...task, list_id: listId });
 
-    // Manual ordering: drop a fractional position between the neighbours, so
-    // one card moves without renumbering the column.
-    if (manualOrder) {
-      const column = ordered(tasks.filter((t) => t.list_id === listId && t.id !== id));
-      const index = beforeId ? column.findIndex((t) => t.id === beforeId) : column.length;
-      const at = index === -1 ? column.length : index;
-      const prev = at > 0 ? column[at - 1].position : null;
-      const next = at < column.length ? column[at].position : null;
-      patch.position =
-        prev == null && next == null ? 1
-          : prev == null ? next - 1
-            : next == null ? prev + 1
-              : (prev + next) / 2;
+      // Show the new order immediately; the server is only catching up.
+      const orderIndex = new Map(next.map((t, i) => [t.id, i + 1]));
+      setTasks((prev) =>
+        prev.map((t) =>
+          orderIndex.has(t.id)
+            ? { ...t, list_id: listId, position: orderIndex.get(t.id) }
+            : t
+        )
+      );
+
+      try {
+        if (!sameList) await api.updateTask(id, { list_id: listId });
+        await api.reorderList(listId, next.map((t) => t.id));
+        if (!manualOrder) await onSettings({ sort_mode: 'manual' });
+      } catch (e) {
+        onError(e.message);
+        load();
+        return;
+      }
+    } else {
+      await update(id, { list_id: listId });
     }
 
     const target = lists.find((l) => l.id === listId);
-    const updated = await update(id, patch);
-
-    // Finishing a task is the moment to tell whoever asked, so offer the reply
-    // right there instead of hoping they remember to open the card.
-    if (updated && !sameList && target?.semantic === 'done' && updated.can_reply) {
-      setOpenTask(updated);
-      setAutoIntent('done');
+    if (!sameList && target?.semantic === 'done') {
+      // Finishing a task is the moment to tell whoever asked, so offer the reply
+      // right there instead of hoping they remember to open the card.
+      const fresh = (await load()).find((t) => t.id === id);
+      if (fresh?.can_reply) {
+        setOpenTask(fresh);
+        setAutoIntent('done');
+      }
     }
   }
 
@@ -259,11 +274,20 @@ export default function Board({
           onChange={(e) => onSettings({ sort_mode: e.target.value })}
           style={{ width: 'auto', flex: '0 0 auto' }}
           aria-label="Card order"
-          title="Smart orders by priority then due date. Manual lets you drag cards into any order."
+          title="Smart orders by priority then due date. Dragging a card into place switches to your own order."
         >
           <option value="smart">Smart order</option>
-          <option value="manual">Manual order</option>
+          <option value="manual">My order</option>
         </select>
+        {manualOrder && (
+          <button
+            className="ghost small"
+            title="Go back to ordering by priority, then due date"
+            onClick={() => onSettings({ sort_mode: 'smart' })}
+          >
+            Reset order
+          </button>
+        )}
       </div>
 
       <div className="board">
@@ -323,14 +347,13 @@ export default function Board({
                     key={t.id}
                     className={overCard === t.id ? 'drop-before' : undefined}
                     onDragOver={(e) => {
-                      if (!manualOrder) return;
+                      if (dragId === null || dragId === t.id) return;
                       e.preventDefault();
                       e.stopPropagation();
                       setOverList(list.id);
                       setOverCard(t.id);
                     }}
                     onDrop={(e) => {
-                      if (!manualOrder) return;
                       e.preventDefault();
                       e.stopPropagation();
                       onDrop(list.id, t.id);

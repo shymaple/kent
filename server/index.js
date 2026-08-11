@@ -355,6 +355,30 @@ app.patch('/api/lists/:id', (req, res) => {
   res.json(db.prepare('SELECT * FROM lists WHERE id = ?').get(list.id));
 });
 
+/**
+ * Set the order of a whole column in one go.
+ *
+ * Taking the full id list and numbering it 1..n is far more robust than nudging
+ * one card's position: no fractional drift, and the client's on-screen order
+ * becomes the stored order exactly.
+ */
+app.post('/api/lists/:id/reorder', (req, res) => {
+  const list = db.prepare('SELECT id FROM lists WHERE id = ?').get(req.params.id);
+  if (!list) return res.status(404).json({ error: 'not found' });
+
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isFinite) : null;
+  if (!ids?.length) return res.status(400).json({ error: 'ids array is required' });
+
+  const update = db.prepare(
+    "UPDATE tasks SET position = ?, updated_at = updated_at WHERE id = ? AND list_id = ?"
+  );
+  db.transaction(() => {
+    ids.forEach((id, i) => update.run(i + 1, id, list.id));
+  })();
+
+  res.json({ ok: true, ordered: ids.length });
+});
+
 app.delete('/api/lists/:id', (req, res) => {
   const list = db.prepare('SELECT * FROM lists WHERE id = ?').get(req.params.id);
   if (!list) return res.status(404).json({ error: 'not found' });

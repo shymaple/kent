@@ -39,6 +39,7 @@ export const api = {
   createList: (name) => request('/lists', { method: 'POST', body: { name } }),
   updateList: (id, body) => request(`/lists/${id}`, { method: 'PATCH', body }),
   deleteList: (id) => request(`/lists/${id}`, { method: 'DELETE' }),
+  reorderList: (id, ids) => request(`/lists/${id}/reorder`, { method: 'POST', body: { ids } }),
 
   comments: (taskId) => request(`/tasks/${taskId}/comments`),
   addComment: (taskId, body, kind) =>
