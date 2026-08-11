@@ -108,6 +108,7 @@ npm run dev                        # server --watch + Vite dev server on :5317
 npm test                           # 114 tests, no network and no model calls
 npm run probe                      # verify the Slack token, list your conversations
 npm run dry-run <#channel> [days]  # full pipeline over a real channel, writes nothing
+npm run smoke                      # render every screen once, catch mount errors
 npm run triage-check               # grade the prompt against labelled fixtures
 npm run classify-once              # one real classification against fixtures/
 ```
@@ -148,7 +149,8 @@ Full detail, including the trust model and how to report a vulnerability:
 
 ## Contributing
 
-Before opening a PR, run `npm test` (114 tests, no network and no model calls) and
+Before opening a PR, run `npm test` (118 tests, no network and no model calls),
+`npm run smoke` (renders every screen) and
 `npm run triage-check`. If you touch `prompts/classify.md`, the triage score is the
 thing to watch — it's what keeps Kent from becoming another noisy inbox.
 

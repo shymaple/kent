@@ -18,14 +18,13 @@ export function dueLabel(dueDate, days) {
  * Display only. Every control lives in the task modal instead - inline selects
  * and buttons could not fit a 300px column without spilling past its edge.
  */
-export default function TaskCard({ task, onOpen, onDragStart, onDragEnd, dragging }) {
+export default function TaskCard({ task, onOpen, lifted = false }) {
   const days = task.days_until_due;
   const linkCount = task.links?.length ?? 0;
 
   return (
     <article
-      className={`card p-${task.priority} ${task.is_broadcast ? 'misc' : ''} ${dragging ? 'dragging' : ''}`}
-      draggable
+      className={`card p-${task.priority} ${task.is_broadcast ? 'misc' : ''} ${lifted ? 'lifted' : ''}`}
       tabIndex={0}
       role="button"
       aria-label={`Open ${task.title}`}
@@ -36,12 +35,6 @@ export default function TaskCard({ task, onOpen, onDragStart, onDragEnd, draggin
           onOpen(task);
         }
       }}
-      onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', String(task.id));
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStart?.(task.id);
-      }}
-      onDragEnd={() => onDragEnd?.()}
     >
       <div className="card-title">{task.title}</div>
 

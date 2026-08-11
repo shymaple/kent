@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor,
+  closestCorners, useSensor, useSensors,
+} from '@dnd-kit/core';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { api } from './api.js';
 import TaskCard from './TaskCard.jsx';
 import TaskModal from './TaskModal.jsx';
 import Modal from './Modal.jsx';
 import TaskForm from './TaskForm.jsx';
+import { SortableCard, DroppableColumn } from './Sortable.jsx';
 
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 
@@ -26,8 +32,10 @@ export default function Board({
   const [tasks, setTasks] = useState([]);
   const [lists, setLists] = useState([]);
   const [dragId, setDragId] = useState(null);
-  const [overList, setOverList] = useState(null);
-  const [overCard, setOverCard] = useState(null);
+  // While a drag is in flight this holds the live arrangement { listId: [id,…] }.
+  // Rendering from it, rather than re-sorting on every pointer move, is what
+  // keeps the gap steady under the cursor instead of flickering between slots.
+  const [dragBoard, setDragBoard] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [autoIntent, setAutoIntent] = useState(null);
   const [showSnoozed, setShowSnoozed] = useState(false);
@@ -88,63 +96,112 @@ export default function Board({
     }
   }
 
-  /**
-   * Drop onto a column. `beforeId` is the card the pointer was over, so a drop
-   * inside the same list becomes a reorder rather than a no-op.
-   */
-  async function onDrop(listId, beforeId = null) {
-    setOverList(null);
-    setOverCard(null);
-    const id = dragId;
+  /* ------------------------------------------------------------ dragging */
+
+  const sensors = useSensors(
+    // A few pixels of travel before a drag begins, so a plain click still opens
+    // the card instead of being swallowed as a tiny drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  /** Which column an id belongs to, whether it's a card or the column itself. */
+  function columnOf(id, board) {
+    if (typeof id === 'string' && id.startsWith('list-')) return Number(id.slice(5));
+    return Number(Object.keys(board).find((listId) => board[listId].includes(id)));
+  }
+
+  function onDragStart({ active }) {
+    setDragId(active.id);
+    // Snapshot what's on screen, so the arrangement during the drag is the one
+    // the user is looking at rather than a re-derived sort.
+    const snapshot = {};
+    for (const list of visibleLists) {
+      snapshot[list.id] = ordered(boardTasks.filter((t) => t.list_id === list.id)).map((t) => t.id);
+    }
+    setDragBoard(snapshot);
+  }
+
+  function onDragOver({ active, over }) {
+    if (!over || !dragBoard) return;
+    const from = columnOf(active.id, dragBoard);
+    const to = columnOf(over.id, dragBoard);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) return;
+
+    // Crossing into another column: open the gap there straight away.
+    setDragBoard((board) => {
+      const target = board[to] ?? [];
+      const overIndex = target.indexOf(over.id);
+      const insertAt = overIndex === -1 ? target.length : overIndex;
+      return {
+        ...board,
+        [from]: board[from].filter((id) => id !== active.id),
+        [to]: [...target.slice(0, insertAt), active.id, ...target.slice(insertAt)],
+      };
+    });
+  }
+
+  function onDragCancel() {
     setDragId(null);
-    if (id == null) return;
+    setDragBoard(null);
+  }
 
-    const task = tasks.find((t) => t.id === id);
-    if (!task || beforeId === id) return;
+  async function onDragEnd({ active, over }) {
+    const board = dragBoard;
+    setDragId(null);
+    setDragBoard(null);
+    if (!board || !over) return;
 
-    const sameList = task.list_id === listId;
+    const task = tasks.find((t) => t.id === active.id);
+    const to = columnOf(over.id, board);
+    if (!task || !Number.isFinite(to)) return;
 
-    // Dropping a card among its neighbours means "put it here", whatever the
-    // sort setting says. Requiring the user to find a Manual toggle first made
-    // dragging silently do nothing - so the drag itself switches the board over.
-    if (beforeId !== null || sameList) {
-      const column = ordered(boardTasks.filter((t) => t.list_id === listId && t.id !== id));
-      const at = beforeId ? column.findIndex((t) => t.id === beforeId) : column.length;
-      const next = [...column];
-      next.splice(at === -1 ? column.length : at, 0, { ...task, list_id: listId });
+    // Settle the final slot within the destination column.
+    const column = board[to] ?? [];
+    const fromIndex = column.indexOf(active.id);
+    const overIndex = column.indexOf(over.id);
+    const finalOrder =
+      fromIndex !== -1 && overIndex !== -1 && fromIndex !== overIndex
+        ? arrayMove(column, fromIndex, overIndex)
+        : column;
 
-      // Show the new order immediately; the server is only catching up.
-      const orderIndex = new Map(next.map((t, i) => [t.id, i + 1]));
-      setTasks((prev) =>
-        prev.map((t) =>
-          orderIndex.has(t.id)
-            ? { ...t, list_id: listId, position: orderIndex.get(t.id) }
-            : t
-        )
-      );
+    const movedList = task.list_id !== to;
+    const sameOrder =
+      !movedList &&
+      finalOrder.join() === ordered(boardTasks.filter((t) => t.list_id === to)).map((t) => t.id).join();
+    if (sameOrder) return;
 
-      try {
-        if (!sameList) await api.updateTask(id, { list_id: listId });
-        await api.reorderList(listId, next.map((t) => t.id));
-        if (!manualOrder) await onSettings({ sort_mode: 'manual' });
-      } catch (e) {
-        onError(e.message);
-        load();
-        return;
+    // Paint the result immediately; the server is only catching up.
+    const rank = new Map(finalOrder.map((id, i) => [id, i + 1]));
+    setTasks((prev) =>
+      prev.map((t) => (rank.has(t.id) ? { ...t, list_id: to, position: rank.get(t.id) } : t))
+    );
+
+    try {
+      if (movedList) await api.updateTask(active.id, { list_id: to });
+      await api.reorderList(to, finalOrder);
+      // Source column closes its gap too, so its numbering stays contiguous.
+      if (movedList && board[task.list_id]?.length) {
+        await api.reorderList(task.list_id, board[task.list_id]);
       }
-    } else {
-      await update(id, { list_id: listId });
+      if (!manualOrder) await onSettings({ sort_mode: 'manual' });
+    } catch (e) {
+      onError(e.message);
+      load();
+      return;
     }
 
-    const target = lists.find((l) => l.id === listId);
-    if (!sameList && target?.semantic === 'done') {
+    const target = lists.find((l) => l.id === to);
+    if (movedList && target?.semantic === 'done') {
       // Finishing a task is the moment to tell whoever asked, so offer the reply
       // right there instead of hoping they remember to open the card.
-      const fresh = (await load()).find((t) => t.id === id);
+      const fresh = (await load()).find((t) => t.id === active.id);
       if (fresh?.can_reply) {
         setOpenTask(fresh);
         setAutoIntent('done');
       }
+    } else {
+      load();
     }
   }
 
@@ -227,11 +284,19 @@ export default function Board({
   // and the priority weren't. The toggle now just filters them out entirely.
   const boardTasks = showMisc ? visible : visible.filter((t) => !t.is_broadcast);
 
-  const cardProps = {
-    onOpen: setOpenTask,
-    onDragStart: setDragId,
-    onDragEnd: () => setDragId(null),
-  };
+  const byId = useMemo(() => new Map(boardTasks.map((t) => [t.id, t])), [boardTasks]);
+
+  /**
+   * A column's cards. Mid-drag this follows the live arrangement, so the gap
+   * stays where the user put it; otherwise it's the normal sort.
+   */
+  function columnItems(listId) {
+    if (dragBoard?.[listId]) return dragBoard[listId].map((id) => byId.get(id)).filter(Boolean);
+    return ordered(boardTasks.filter((t) => t.list_id === listId));
+  }
+
+  const draggedTask = dragId != null ? byId.get(dragId) : null;
+  const overListId = dragBoard ? columnOf(dragId, dragBoard) : null;
 
   return (
     <>
@@ -290,24 +355,19 @@ export default function Board({
         )}
       </div>
 
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDragEnd={onDragEnd}
+        onDragCancel={onDragCancel}
+      >
       <div className="board">
         {visibleLists.map((list) => {
-          const items = ordered(boardTasks.filter((t) => t.list_id === list.id));
+          const items = columnItems(list.id);
           return (
-            <section
-              key={list.id}
-              className={`column ${overList === list.id ? 'drag-over' : ''}`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                setOverList(list.id);
-              }}
-              onDragLeave={() => setOverList((c) => (c === list.id ? null : c))}
-              onDrop={(e) => {
-                e.preventDefault();
-                onDrop(list.id);
-              }}
-            >
+            <DroppableColumn key={list.id} list={list} isOver={dragId != null && overListId === list.id}>
               <header className="column-head">
                 {renaming === list.id ? (
                   <input
@@ -342,26 +402,11 @@ export default function Board({
               </header>
 
               <div className="column-scroll">
-                {items.map((t) => (
-                  <div
-                    key={t.id}
-                    className={overCard === t.id ? 'drop-before' : undefined}
-                    onDragOver={(e) => {
-                      if (dragId === null || dragId === t.id) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setOverList(list.id);
-                      setOverCard(t.id);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onDrop(list.id, t.id);
-                    }}
-                  >
-                    <TaskCard task={t} dragging={dragId === t.id} {...cardProps} />
-                  </div>
-                ))}
+                <SortableContext items={items.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                  {items.map((t) => (
+                    <SortableCard key={t.id} task={t} onOpen={setOpenTask} />
+                  ))}
+                </SortableContext>
               </div>
 
               <button
@@ -370,7 +415,7 @@ export default function Board({
               >
                 + Add
               </button>
-            </section>
+            </DroppableColumn>
           );
         })}
 
@@ -394,6 +439,13 @@ export default function Board({
           )}
         </div>
       </div>
+
+      {/* The card under the cursor, rendered above everything so it can leave
+          its column without being clipped by the column's own scroll box. */}
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
+        {draggedTask ? <TaskCard task={draggedTask} onOpen={() => {}} lifted /> : null}
+      </DragOverlay>
+      </DndContext>
 
       {tasks.length === 0 && (
         <p className="empty">

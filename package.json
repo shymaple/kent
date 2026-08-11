@@ -15,7 +15,8 @@
     "probe": "node server/scripts/probe.js",
     "classify-once": "node server/scripts/classify-once.js",
     "triage-check": "node server/scripts/triage-check.js",
-    "dry-run": "node server/scripts/dry-run.js"
+    "dry-run": "node server/scripts/dry-run.js",
+    "smoke": "node_modules/.bin/esbuild client/smoke.jsx --bundle --platform=node --format=cjs --jsx=automatic --outfile=node_modules/.cache/kent-smoke.cjs --log-level=error && node node_modules/.cache/kent-smoke.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",
