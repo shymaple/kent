@@ -129,3 +129,75 @@ export function maskToken(token) {
   const prefix = /^xox[a-z]-/.test(token) ? token.slice(0, 5) : '';
   return `${prefix}…${token.slice(-4)}`;
 }
+
+// ------------------------------------------------------------------- Gmail
+
+/**
+ * Gmail's OAuth material: the client id and secret you created in Google Cloud,
+ * and the refresh token Google issued for them. Kept as one entry because none
+ * of the three is any use without the other two, and stored exactly like the
+ * Slack token - Keychain on macOS, a 0600 file elsewhere, never the database.
+ */
+const GMAIL_FILE = join(root, '.gmail-oauth');
+const GMAIL_SERVICE = 'kent-gmail';
+const GMAIL_ACCOUNT = 'gmail-oauth';
+
+export function getGmailSecrets() {
+  let raw = process.env.MYBOT_GMAIL_OAUTH || null;
+
+  if (!raw && useKeychain) {
+    try {
+      raw = execFileSync(
+        'security',
+        ['find-generic-password', '-s', GMAIL_SERVICE, '-a', GMAIL_ACCOUNT, '-w'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim();
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw && existsSync(GMAIL_FILE)) raw = readFileSync(GMAIL_FILE, 'utf8').trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.clientId && parsed?.clientSecret && parsed?.refreshToken ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setGmailSecrets({ clientId, clientSecret, refreshToken }) {
+  const value = JSON.stringify({ clientId, clientSecret, refreshToken });
+
+  if (useKeychain) {
+    try {
+      execFileSync(
+        'security',
+        ['add-generic-password', '-U', '-s', GMAIL_SERVICE, '-a', GMAIL_ACCOUNT, '-w', value],
+        { stdio: 'ignore' }
+      );
+      return { stored: 'keychain' };
+    } catch {
+      // fall through to the file
+    }
+  }
+  writeFileSync(GMAIL_FILE, value, { mode: 0o600 });
+  chmodSync(GMAIL_FILE, 0o600);
+  return { stored: 'file' };
+}
+
+export function clearGmailSecrets() {
+  if (useKeychain) {
+    try {
+      execFileSync('security', ['delete-generic-password', '-s', GMAIL_SERVICE, '-a', GMAIL_ACCOUNT], {
+        stdio: 'ignore',
+      });
+    } catch {
+      // nothing stored
+    }
+  }
+  if (existsSync(GMAIL_FILE)) unlinkSync(GMAIL_FILE);
+}
+
+export const hasGmail = () => Boolean(getGmailSecrets());

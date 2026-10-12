@@ -5,10 +5,30 @@ import { useEffect, useRef } from 'react';
  *
  * Closes on Escape and on a backdrop click, traps Tab inside itself while open,
  * locks background scrolling, and returns focus to whatever opened it.
+ *
+ * The setup effect runs once per dialog, never per render. It used to depend on
+ * `onClose`, which callers pass as an inline arrow, so every re-render of the
+ * parent tore the effect down and ran it again - and running it again moves
+ * focus. In the new-task dialog that meant one keystroke in Description threw
+ * the cursor back to Title; in the task modal, any autosave or background
+ * status poll pulled focus out of the field being typed in.
  */
 export default function Modal({ onClose, labelledBy, children, wide = false }) {
   const panelRef = useRef(null);
   const returnFocusTo = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  /**
+   * Fields save when they are left, and an unmounting field never gets a blur.
+   * Leaving it by hand first is what makes "close the dialog" unable to drop
+   * the last thing typed.
+   */
+  function close() {
+    const el = document.activeElement;
+    if (el && el !== panelRef.current && panelRef.current?.contains(el)) el.blur();
+    onCloseRef.current();
+  }
 
   useEffect(() => {
     returnFocusTo.current = document.activeElement;
@@ -33,8 +53,11 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
 
     function onKeyDown(e) {
       if (e.key === 'Escape') {
+        // A field that gives Escape its own meaning (revert this edit) keeps
+        // it; the next Escape, from outside the field, closes the dialog.
+        if (e.target.closest?.('[data-own-escape]')) return;
         e.stopPropagation();
-        onClose();
+        close();
         return;
       }
       if (e.key !== 'Tab') return;
@@ -60,7 +83,7 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
       document.body.classList.remove('modal-open');
       returnFocusTo.current?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
@@ -68,7 +91,7 @@ export default function Modal({ onClose, labelledBy, children, wide = false }) {
       // Only a click that starts AND ends on the backdrop closes it, so
       // dragging a text selection out of the panel doesn't dismiss your edits.
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) close();
       }}
     >
       <div

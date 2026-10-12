@@ -115,13 +115,68 @@ In **Settings**:
 - **Channels** — everything you're a member of is watched by default. Untick what
   you want ignored.
 - **Sync** — how often to poll Slack (default 15 min), how far back to look on the
-  first run (default 7 days), and which model to classify with.
+  first run (default 0 — only messages sent after setup), and which model to classify with.
 
 Then hit **Sync now**. New asks land in **Inbox**; approve them into the board.
 
 ---
 
-## 5. Keep it running at login (optional, macOS)
+## 5. Connect Gmail (optional)
+
+Kent can read your email the same way it reads Slack: new mail addressed to you
+is checked for asks, and everything else is dropped before any model call. It is
+**read-only** — the only permission requested is `gmail.readonly`, and Kent has
+no code that sends, labels, archives or deletes mail.
+
+Like the Slack app, this is a one-time setup in your own Google account, so no
+third party ever holds your mail. Google renames these screens from time to
+time; the names below are what to look for.
+
+1. Go to <https://console.cloud.google.com/>, create a project (any name, e.g.
+   "Kent").
+2. **APIs & Services → Library** → search for **Gmail API** → **Enable**.
+3. **APIs & Services → OAuth consent screen** (also called *Google Auth
+   Platform*). User type **External** (or **Internal** if this is a Google
+   Workspace account and you're allowed to). App name "Kent", your own email for
+   the support and developer contacts.
+   - Under **Data access / Scopes**, add `https://www.googleapis.com/auth/gmail.readonly`.
+   - Under **Audience / Test users**, add your own Gmail address.
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**.
+   Application type: **Desktop app**. Copy the **Client ID** and **Client
+   secret**.
+5. In Kent: **Settings → Email (Gmail)** → paste both → **Connect Gmail**. A
+   Google tab opens. You will see *"Google hasn't verified this app"* — that is
+   expected, because the app is yours and only you use it: **Advanced → Go to
+   Kent**, then allow read access. The tab says "Gmail is connected" and
+   Settings flips to **Connected** on its own.
+
+Kent starts from that moment: mail already in your inbox is left alone (unless
+you set **On a new channel, look back** to a number of days first).
+
+**One thing worth doing straight away.** While the consent screen is in
+*Testing*, Google expires the sign-in after **7 days** and Kent will ask you to
+reconnect each week. To stop that, set the publishing status to **In
+production** on the consent screen. You do not need to submit it for
+verification for personal use — the "hasn't verified" warning simply stays. An
+**Internal** Workspace app has neither limit.
+
+What Kent does with mail:
+
+- **Addressed to you** (you're in *To*) → checked for an ask.
+- **Cc'd** → only if the message uses one of your names from Settings.
+- **Newsletters, receipts, no-reply senders, calendar invitations, Promotions /
+  Social / Forums** → skipped for free, never shown to the model.
+- **You already replied** → skipped, like a ✅ in Slack.
+- **A later email in a thread that already has a card** → appears in the Inbox
+  as *"add as subtask"* of that card, so one conversation stays one card.
+
+To disconnect: **Settings → Email (Gmail) → Disconnect**, which deletes the
+stored credentials. To revoke on Google's side too, remove Kent at
+<https://myaccount.google.com/permissions>.
+
+---
+
+## 6. Keep it running at login (optional, macOS)
 
 Save as `~/Library/LaunchAgents/com.kent.server.plist`, editing the two paths:
 

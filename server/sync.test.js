@@ -222,9 +222,10 @@ test('a message the model rejects is recorded, not inboxed', async () => {
   assert.equal(db.prepare("SELECT COUNT(*) n FROM seen_messages WHERE outcome='not_task'").get().n, 3);
 });
 
-test('a classifier failure holds messages back instead of inboxing raw text', async () => {
+test('an unreachable model parks messages on disk instead of inboxing raw text', async () => {
   db.prepare('DELETE FROM seen_messages').run();
   db.prepare('DELETE FROM inbox_items').run();
+  db.prepare('DELETE FROM pending_candidates').run();
   db.prepare('UPDATE channels SET last_synced_ts = NULL').run();
   db.prepare('UPDATE people SET is_priority = 0').run();
 
@@ -236,24 +237,30 @@ test('a classifier failure holds messages back instead of inboxing raw text', as
 
   assert.equal(stats.inboxed, 0, 'unclassified messages must not reach the board');
   assert.equal(stats.retrying, 3);
+  assert.equal(stats.waiting, 3, 'all three are safe on disk');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM inbox_items').get().n, 0);
-  assert.equal(
-    db.prepare('SELECT COUNT(*) n FROM seen_messages').get().n,
-    0,
-    'nothing is marked seen, so the next sync retries it'
-  );
-  assert.equal(
+
+  const queued = db.prepare('SELECT * FROM pending_candidates').all();
+  assert.equal(queued.length, 3);
+  assert.ok(queued.every((q) => q.attempts === 1 && q.last_error), 'the reason is recorded, not swallowed');
+
+  // The cursor is free to advance now: the messages no longer depend on Slack
+  // handing them back a second time.
+  assert.ok(
     db.prepare("SELECT last_synced_ts FROM channels WHERE id = 'C1'").get().last_synced_ts,
-    null,
-    'the channel cursor is held back'
+    'the channel cursor advances because the queue is durable'
   );
 });
 
-test('the retried messages are picked up on the next healthy sync', async () => {
+test('the parked messages are judged as soon as the model answers again', async () => {
+  // Note: no new Slack messages, and the cursor has moved past them. The queue
+  // alone is what carries them - which is the whole point of it.
   const stats = await sync();
-  assert.equal(stats.candidates, 3, 'the held-back messages come round again');
-  assert.equal(stats.inboxed, 3);
+  assert.equal(stats.candidates, 0, 'nothing new arrived from Slack');
+  assert.equal(stats.inboxed, 3, 'the backlog is judged anyway');
   assert.equal(stats.retrying, 0);
+  assert.equal(stats.waiting, 0, 'the queue drains once they are triaged');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM pending_candidates').get().n, 0);
 });
 
 test('dismissed messages never come back', async () => {
@@ -298,4 +305,31 @@ test('excluded channels are skipped entirely', async () => {
 test.after(() => {
   db.close();
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('a mention that is only social never becomes a card, even if the model says task', async () => {
+  db.prepare('DELETE FROM seen_messages').run();
+  db.prepare('DELETE FROM inbox_items').run();
+  db.prepare('DELETE FROM pending_candidates').run();
+  db.prepare('UPDATE channels SET last_synced_ts = NULL, is_excluded = 0').run();
+  db.prepare('UPDATE people SET is_priority = 0').run();
+
+  HISTORY.C1.push(
+    { user: 'U2', text: `<@${ME}> are you coming for lunch?`, ts: ts(-100) },
+    { user: 'U2', text: `<@${ME}> how are you?`, ts: ts(-90) },
+    // Mentions a meal, but the ask is a job - this one must survive.
+    { user: 'U2', text: `<@${ME}> can you book the venue for the team dinner on Friday?`, ts: ts(-80) }
+  );
+
+  const stats = await sync();   // the fake classifier calls everything a task
+  HISTORY.C1.splice(-3);
+
+  const titles = db.prepare('SELECT source_text FROM inbox_items').all().map((r) => r.source_text);
+  assert.equal(stats.social, 2);
+  assert.ok(!titles.some((t) => /lunch\?|how are you/.test(t)), 'social mentions must not be inboxed');
+  assert.ok(titles.some((t) => t.includes('book the venue')), 'real work that mentions dinner survives');
+  assert.equal(
+    db.prepare('SELECT COUNT(*) n FROM pending_candidates').get().n, 0,
+    'rejected messages still leave the queue, so they are never judged twice'
+  );
 });

@@ -45,6 +45,11 @@ export default function Board({
   const [confirmList, setConfirmList] = useState(null);
   const [addingList, setAddingList] = useState(false);
   const [newListName, setNewListName] = useState('');
+  // The new-task dialog has two ways in: write it, or point at a Slack message.
+  const [addMode, setAddMode] = useState('manual');
+  const [slackUrl, setSlackUrl] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -102,7 +107,12 @@ export default function Board({
     // A few pixels of travel before a drag begins, so a plain click still opens
     // the card instead of being swallowed as a tiny drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    // Space lifts and drops; Enter is left free to open the card (and still
+    // drops one that is being carried).
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space', 'Enter'] },
+    })
   );
 
   /** Which column an id belongs to, whether it's a card or the column itself. */
@@ -188,6 +198,8 @@ export default function Board({
     } catch (e) {
       onError(e.message);
       load();
+      // Refused because a step is still open: put the steps in front of them.
+      if (e.code === 'open_subtasks') setOpenTask(task);
       return;
     }
 
@@ -205,15 +217,68 @@ export default function Board({
     }
   }
 
+  /** The tick on a card: finish it without a drag or a dialog. */
+  async function complete(task) {
+    const done = lists.find((l) => l.semantic === 'done');
+    if (!done) return;
+    try {
+      const saved = await api.updateTask(task.id, { list_id: done.id });
+      setTasks((prev) => prev.map((t) => (t.id === saved.id ? saved : t)));
+      if (saved.can_reply) {
+        setOpenTask(saved);
+        setAutoIntent('done');
+      }
+    } catch (e) {
+      onError(e.message);
+      if (e.code === 'open_subtasks') setOpenTask(task);
+    }
+  }
+
   async function createTask() {
     const title = adding?.title?.trim();
     if (!title) return;
     try {
       const created = await api.createTask({ ...adding, title });
       setTasks((prev) => [...prev, created]);
-      setAdding(null);
+      closeAdd();
     } catch (e) {
       onError(e.message);
+    }
+  }
+
+  /** Looks like a link to one Slack message. The server is the real judge. */
+  const slackUrlLooksRight = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.slack\.com\/archives\/[CGD][A-Z0-9]+\/p\d{16}(\?.*)?$/i
+    .test(slackUrl.trim());
+
+  function closeAdd() {
+    setAdding(null);
+    setSlackUrl('');
+    setImportError(null);
+    setAddMode('manual');
+  }
+
+  /** Build the task from the message itself, then open it so it can be checked. */
+  async function importFromSlack() {
+    if (!slackUrlLooksRight || importing) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const created = await api.importSlack(slackUrl.trim(), adding?.list_id);
+      setTasks((prev) => [...prev, created]);
+      closeAdd();
+      setOpenTask(created);
+    } catch (e) {
+      // Already on the board: take them to it rather than just saying so.
+      const existing = e.code === 'exists' && tasks.find((t) => t.id === e.data?.task_id);
+      if (existing) {
+        closeAdd();
+        setOpenTask(existing);
+        onError(e.message);
+      } else {
+        setImportError(e.message);
+      }
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -404,7 +469,7 @@ export default function Board({
               <div className="column-scroll">
                 <SortableContext items={items.map((t) => t.id)} strategy={verticalListSortingStrategy}>
                   {items.map((t) => (
-                    <SortableCard key={t.id} task={t} onOpen={setOpenTask} />
+                    <SortableCard key={t.id} task={t} onOpen={setOpenTask} onComplete={complete} />
                   ))}
                 </SortableContext>
               </div>
@@ -456,6 +521,7 @@ export default function Board({
       {openTask && (
         <TaskModal
           task={openTask}
+          lists={lists}
           templates={settings?.comment_templates ?? []}
           autoIntent={autoIntent}
           onClose={() => {
@@ -464,7 +530,10 @@ export default function Board({
           }}
           onSaved={(saved) => {
             setTasks((prev) => prev.map((t) => (t.id === saved.id ? saved : t)));
-            setOpenTask(saved);
+            // Only while it is still the open card: a save that lands after the
+            // dialog closed (closing is what triggers the last save) must not
+            // open it again.
+            setOpenTask((cur) => (cur?.id === saved.id ? saved : cur));
           }}
           onDeleted={(id) => {
             setTasks((prev) => prev.filter((t) => t.id !== id));
@@ -476,20 +545,100 @@ export default function Board({
       )}
 
       {adding && (
-        <Modal onClose={() => setAdding(null)} labelledBy="add-task-title">
+        <Modal onClose={closeAdd} labelledBy="add-task-title">
           <header className="modal-head">
             <h2 id="add-task-title">New task</h2>
-            <button className="ghost" onClick={() => setAdding(null)} aria-label="Close">✕</button>
+            <button className="ghost" onClick={closeAdd} aria-label="Close">✕</button>
           </header>
-          <div className="modal-body single">
+
+          <div className="subtabs add-modes" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={addMode === 'manual'}
+              className={`subtab ${addMode === 'manual' ? 'active' : ''}`}
+              onClick={() => setAddMode('manual')}
+            >
+              Write it
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={addMode === 'slack'}
+              className={`subtab ${addMode === 'slack' ? 'active' : ''}`}
+              onClick={() => setAddMode('slack')}
+            >
+              From a Slack link
+            </button>
+          </div>
+
+          {addMode === 'slack' ? (
+            <form
+              className="modal-body single"
+              onSubmit={(e) => {
+                e.preventDefault();
+                importFromSlack();
+              }}
+            >
+              <div className="field">
+                <label htmlFor="slack-url">Link to the Slack message</label>
+                <input
+                  id="slack-url"
+                  type="url"
+                  autoFocus
+                  value={slackUrl}
+                  disabled={importing}
+                  placeholder="https://your-workspace.slack.com/archives/C…/p…"
+                  onChange={(e) => {
+                    setSlackUrl(e.target.value);
+                    setImportError(null);
+                  }}
+                />
+                {slackUrl.trim() && !slackUrlLooksRight && (
+                  <p className="hint warn">
+                    That doesn't look like a link to a Slack message. In Slack, hover the message →
+                    ⋮ → <strong>Copy link</strong>.
+                  </p>
+                )}
+                {importError && <div className="problems" role="alert">{importError}</div>}
+              </div>
+              <p className="hint">
+                Kent reads that one message and fills in the title, who asked, the channel, any
+                deadline and its attachments. You can edit everything afterwards.
+              </p>
+              <div className="row end">
+                <button type="button" className="ghost" onClick={closeAdd}>Cancel</button>
+                <button type="submit" className="primary" disabled={!slackUrlLooksRight || importing}>
+                  {importing ? 'Reading the message…' : 'Create from link'}
+                </button>
+              </div>
+            </form>
+          ) : (
+          /* A form, so Enter in the title adds the task - the way every other
+             quick-add works - and ⌘↵ does from the description. */
+          <form
+            className="modal-body single"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createTask();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                createTask();
+              }
+            }}
+          >
             <TaskForm value={adding} onChange={setAdding} lists={lists} autoFocus />
             <div className="row end">
-              <button className="ghost" onClick={() => setAdding(null)}>Cancel</button>
-              <button className="primary" onClick={createTask} disabled={!adding.title?.trim()}>
+              <span className="hint" style={{ marginRight: 'auto' }}>↵ to add</span>
+              <button type="button" className="ghost" onClick={closeAdd}>Cancel</button>
+              <button type="submit" className="primary" disabled={!adding.title?.trim()}>
                 Add task
               </button>
             </div>
-          </div>
+          </form>
+          )}
         </Modal>
       )}
 

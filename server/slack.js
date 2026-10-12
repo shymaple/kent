@@ -261,6 +261,43 @@ export async function fetchReplies(channelId, threadTs, { oldest } = {}, opts) {
 }
 
 /**
+ * A whole thread, parent included, as it stands right now.
+ *
+ * Used to re-read a message we already triaged, so a tick reaction or a reply
+ * added since is visible. Unlike fetchReplies this keeps the parent — the
+ * reaction usually sits on it — and takes any ts in the thread.
+ */
+export async function fetchThread(channelId, ts, opts) {
+  const json = await call('conversations.replies', { channel: channelId, ts, limit: 200 }, opts);
+  return (json.messages ?? []).sort((a, b) => Number(a.ts) - Number(b.ts));
+}
+
+/**
+ * One message, by its exact ts.
+ *
+ * A top-level message is in the channel's history; a reply only exists inside
+ * its thread, and history will never return it. Which of the two a pasted link
+ * points at isn't always knowable from the link, so both are tried.
+ */
+export async function fetchMessage(channelId, ts, threadTs, opts) {
+  if (!threadTs) {
+    const json = await call(
+      'conversations.history',
+      { channel: channelId, latest: ts, oldest: ts, inclusive: true, limit: 1 },
+      opts
+    );
+    const hit = (json.messages ?? []).find((m) => m.ts === ts);
+    if (hit) return hit;
+  }
+  const json = await call(
+    'conversations.replies',
+    { channel: channelId, ts: threadTs ?? ts, latest: ts, oldest: ts, inclusive: true, limit: 5 },
+    opts
+  );
+  return (json.messages ?? []).find((m) => m.ts === ts) ?? null;
+}
+
+/**
  * Permalink for a message. chat.getPermalink is the correct source of truth,
  * but we can synthesise one from the team domain if the call fails (e.g. a
  * scope gap) so a card is never left without a link back to Slack.

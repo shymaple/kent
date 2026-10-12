@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_HANDLED_REACTIONS } from './handled.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dbPath = process.env.MYBOT_DB ?? join(root, 'data', 'app.db');
@@ -40,9 +41,35 @@ CREATE TABLE IF NOT EXISTS people (
 CREATE TABLE IF NOT EXISTS seen_messages (
   channel_id TEXT NOT NULL,
   message_ts TEXT NOT NULL,
-  outcome    TEXT NOT NULL,                  -- inboxed | dismissed | not_task | merged
+  outcome    TEXT NOT NULL,                  -- queued | inboxed | dismissed | not_task | merged | handled
   seen_at    TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (channel_id, message_ts)
+);
+
+-- Messages that matched you and are waiting on the model.
+--
+-- A mention is captured the moment Slack hands it over, before the model is
+-- involved at all. That is the whole point: Claude being asleep, logged out,
+-- rate limited or simply not running must never cost you a task. Whichever sync
+-- finds the model working again drains this queue, however many days later.
+CREATE TABLE IF NOT EXISTS pending_candidates (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id      TEXT NOT NULL,
+  channel_name    TEXT NOT NULL,
+  message_ts      TEXT NOT NULL,
+  thread_ts       TEXT,
+  assigner_id     TEXT,
+  assigner_name   TEXT,
+  reason          TEXT NOT NULL,
+  is_broadcast    INTEGER NOT NULL DEFAULT 0,
+  sent_at         TEXT NOT NULL,              -- ISO instant the message was sent
+  text            TEXT NOT NULL,
+  payload         TEXT NOT NULL,              -- the whole candidate, as JSON
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  queued_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  last_attempt_at TEXT,
+  UNIQUE (channel_id, message_ts)
 );
 
 CREATE TABLE IF NOT EXISTS inbox_items (
@@ -127,6 +154,26 @@ CREATE TABLE IF NOT EXISTS comments (
 
 CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id, id);
 
+-- Steps inside a task. A card is rarely one action: "ship the report" is draft,
+-- get numbers from finance, send. Without these the board could only say done or
+-- not done, so a half-finished card got dragged to Completed with the remainder
+-- living in someone's head. A task with an open step cannot be completed.
+-- source/source_ref say where a step came from, so a later message in the same
+-- thread can add a step to the card instead of spawning a second card.
+CREATE TABLE IF NOT EXISTS subtasks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  done       INTEGER NOT NULL DEFAULT 0,
+  position   REAL NOT NULL DEFAULT 0,
+  source     TEXT NOT NULL DEFAULT 'manual',   -- manual | slack | email
+  source_ref TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  done_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id, position, id);
+
 CREATE TABLE IF NOT EXISTS sync_runs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -149,6 +196,21 @@ function addColumn(table, column, definition) {
 }
 
 addColumn('tasks', 'list_id', 'INTEGER REFERENCES lists(id)');
+addColumn('sync_runs', 'handled', 'INTEGER NOT NULL DEFAULT 0');
+// Email arrived as a second source. channel_id/message_ts/thread_ts carry
+// 'gmail' / the message id / the thread id, so every (channel, message) key and
+// the thread lookup keep working unchanged. What does not carry over is the
+// time: a Slack ts *is* a timestamp, a Gmail id is not, so it is stored.
+addColumn('inbox_items', 'source', "TEXT NOT NULL DEFAULT 'slack'");
+addColumn('inbox_items', 'sent_at', 'TEXT');
+// Set when this item is a new ask in a thread that already has a card: approving
+// it adds a subtask to that card instead of making a second one.
+addColumn('inbox_items', 'parent_task_id', 'INTEGER');
+addColumn('tasks', 'source', 'TEXT');
+addColumn('tasks', 'sent_at', 'TEXT');
+// The description as the editor wrote it, already sanitised (see richtext.js).
+// `description` stays the plain-text rendering that search and the model read.
+addColumn('tasks', 'description_html', 'TEXT');
 
 export const DEFAULT_LISTS = [
   { name: 'Open', semantic: 'backlog', status: 'open' },
@@ -233,7 +295,12 @@ export const DEFAULT_SETTINGS = {
   show_completed: 'true',
   show_miscellaneous: 'true',
   comment_templates: '[]',
+  // Work you already answered or ticked off in Slack never reaches triage.
+  auto_retire_handled: 'true',
+  handled_reactions: JSON.stringify(DEFAULT_HANDLED_REACTIONS),
   tone_note: '',           // distilled from a sample of your own Slack messages
+  gmail_address: '',       // whose mailbox is connected; discovered at connect
+  gmail_cursor: '',        // epoch seconds of the newest email read; '' = never
 };
 
 export function getSetting(key) {

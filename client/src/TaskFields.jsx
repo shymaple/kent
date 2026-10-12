@@ -2,39 +2,41 @@
  * The editable body of a task: the three quick attributes, then the detail.
  *
  * Every control saves as soon as you leave it — there is no Save button, so
- * `onCommit` is called with just the changed field. Text areas commit on blur
- * rather than on each keystroke, so a paragraph is one write, not eighty.
+ * `onCommit` is called with just the changed field. The description commits on
+ * blur rather than on each keystroke, so a paragraph is one write, not eighty.
  */
 import { useEffect, useState } from 'react';
+import RichText, { plainToHtml } from './RichText.jsx';
 
 const CATEGORIES = ['bug', 'review', 'meeting', 'admin', 'doc', 'followup', 'other'];
 
-/** A textarea that keeps its own draft and reports the value when you leave it. */
-function AutoSaveText({ id, label, value, placeholder, rows, onCommit }) {
+/**
+ * A date field that reports once, when you leave it.
+ *
+ * Typed by keyboard, a date input fires a change for every digit - 0002, 0020,
+ * 0202, 2026 are all "valid" years on the way to the one you meant. Saving each
+ * of those wrote nonsense like 0005-02-12 to the card and re-rendered the board
+ * under the cursor. A value picked from the calendar is still a single change;
+ * it just lands when focus moves on, or when the dialog closes.
+ */
+export function AutoSaveDate({ id, value, onCommit, ...rest }) {
   const [draft, setDraft] = useState(value ?? '');
 
-  // Follow the task if it changes underneath us (another edit, a sync), but
-  // never clobber what the user is part-way through typing.
   useEffect(() => {
     setDraft(value ?? '');
   }, [value]);
 
   return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
-      <textarea
-        id={id}
-        rows={rows}
-        value={draft}
-        placeholder={placeholder}
-        maxLength={2000}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          const next = draft.trim();
-          if (next !== (value ?? '')) onCommit(next || null);
-        }}
-      />
-    </div>
+    <input
+      id={id}
+      type="date"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft !== (value ?? '')) onCommit(draft || null);
+      }}
+      {...rest}
+    />
   );
 }
 
@@ -56,11 +58,10 @@ export default function TaskFields({ task, onCommit }) {
         </div>
         <div>
           <label htmlFor="task-due">Due date</label>
-          <input
+          <AutoSaveDate
             id="task-due"
-            type="date"
-            value={task.due_date ?? ''}
-            onChange={(e) => onCommit({ due_date: e.target.value || null })}
+            value={task.due_date}
+            onCommit={(due_date) => onCommit({ due_date })}
           />
         </div>
         <div>
@@ -77,14 +78,17 @@ export default function TaskFields({ task, onCommit }) {
         </div>
       </div>
 
-      <AutoSaveText
-        id="task-desc"
-        label="Description"
-        rows={3}
-        value={task.description}
-        placeholder="Any detail worth keeping"
-        onCommit={(description) => onCommit({ description })}
-      />
+      <div className="field">
+        <label htmlFor="task-desc">Description</label>
+        <RichText
+          id="task-desc"
+          label="Description"
+          // A description Kent wrote, or one from before the editor, is plain text.
+          value={task.description_html ?? plainToHtml(task.description)}
+          placeholder="Any detail worth keeping"
+          onCommit={(description_html) => onCommit({ description_html })}
+        />
+      </div>
     </>
   );
 }

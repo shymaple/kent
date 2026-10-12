@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Modal from './Modal.jsx';
-import TaskFields from './TaskFields.jsx';
-import { dueChipClass, dueLabel } from './TaskCard.jsx';
+import TaskFields, { AutoSaveDate } from './TaskFields.jsx';
+import Subtasks from './Subtasks.jsx';
+import { dueChipClass, dueLabel, sentFull, sentShort } from './TaskCard.jsx';
 
 const INTENTS = [
   { key: 'done', label: 'Done' },
@@ -17,7 +18,7 @@ const truncate = (text, max) => {
 };
 
 export default function TaskModal({
-  task, templates = [], autoIntent, onClose, onSaved, onDeleted, onError,
+  task, lists = [], templates = [], autoIntent, onClose, onSaved, onDeleted, onError,
 }) {
   const [comments, setComments] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -30,6 +31,21 @@ export default function TaskModal({
   const [drafting, setDrafting] = useState(false);
   const [sendingId, setSendingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Open subtasks that stopped the task being completed, or null.
+  const [blockedBy, setBlockedBy] = useState(null);
+  const [finishedHere, setFinishedHere] = useState(false);
+  const [subtaskReload, setSubtaskReload] = useState(0);
+  // Escape reverts the title and then blurs it; the blur handler still sees the
+  // text that was being typed, so it needs telling not to save it.
+  const revertingTitle = useRef(false);
+
+  // Follow a title changed elsewhere (a sync, another tab) while the dialog is open.
+  useEffect(() => {
+    setTitle(task.title);
+  }, [task.title]);
+
+  const doneList = lists.find((l) => l.semantic === 'done');
+  const reopenList = lists.find((l) => l.semantic === 'backlog') ?? lists.find((l) => l.semantic !== 'done');
 
   // Declared before the effects that read it, not after.
   const canReply = Boolean(task.channel_id && (task.thread_ts || task.message_ts));
@@ -67,6 +83,35 @@ export default function TaskModal({
       setSavedAt(Date.now());
     } catch (e) {
       onError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Move the task to another list. Completing goes through the same door as
+   * dragging does, so the server's "a step is still open" refusal is handled in
+   * one place: the open steps are named, with the choice to close them all.
+   */
+  async function moveTo(listId, { completeSubtasks = false } = {}) {
+    const finishing = doneList && listId === doneList.id && !task.is_done;
+    setSaving(true);
+    try {
+      const saved = await api.updateTask(task.id, {
+        list_id: listId,
+        ...(completeSubtasks ? { complete_subtasks: true } : {}),
+      });
+      onSaved(saved);
+      setSavedAt(Date.now());
+      setBlockedBy(null);
+      if (completeSubtasks) setSubtaskReload((n) => n + 1);
+      if (finishing) {
+        setFinishedHere(true);
+        if (canReply) generate('done');
+      }
+    } catch (e) {
+      if (e.code === 'open_subtasks') setBlockedBy(e.data.open_subtasks);
+      else onError(e.message);
     } finally {
       setSaving(false);
     }
@@ -148,7 +193,12 @@ export default function TaskModal({
           placeholder="Task title"
           aria-label="Task title"
           onChange={(e) => setTitle(e.target.value)}
+          data-own-escape=""
           onBlur={() => {
+            if (revertingTitle.current) {
+              revertingTitle.current = false;
+              return;
+            }
             const next = title.trim();
             if (!next) return setTitle(task.title);
             if (next !== task.title) commit({ title: next });
@@ -156,6 +206,7 @@ export default function TaskModal({
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
             if (e.key === 'Escape') {
+              revertingTitle.current = true;
               setTitle(task.title);
               e.currentTarget.blur();
             }
@@ -175,9 +226,15 @@ export default function TaskModal({
               {truncate(task.channel_name, 24)}
             </span>
           )}
+          {sentShort(task.sent_at) && (
+            <span className="head-tag" title={sentFull(task.sent_at, task.sent_at_source)}>
+              {task.sent_at_source === 'local' ? 'added' : 'sent'}{' '}
+              <strong>{sentShort(task.sent_at)}</strong>
+            </span>
+          )}
           {task.permalink && (
             <a className="head-tag link" href={task.permalink} target="_blank" rel="noreferrer">
-              ↗ Slack
+              ↗ {task.source === 'email' ? 'Email' : 'Slack'}
             </a>
           )}
         </div>
@@ -187,18 +244,88 @@ export default function TaskModal({
 
       <div className="modal-body">
         <section className="modal-main">
+          {/* Finishing a task is the most common thing done to one, so it gets
+              a button rather than a drag across the board - which on a narrow
+              window means scrolling a column into view first. */}
+          {lists.length > 0 && (
+            <div className="row stage-row">
+              <select
+                className="stage-select"
+                value={task.list_id ?? ''}
+                aria-label="Move to"
+                onChange={(e) => moveTo(Number(e.target.value))}
+              >
+                {[...lists].sort((a, b) => a.position - b.position).map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+              <div style={{ flex: 1 }} />
+              {task.is_done ? (
+                reopenList && <button onClick={() => moveTo(reopenList.id)}>Reopen</button>
+              ) : (
+                doneList && (
+                  <button className="primary" onClick={() => moveTo(doneList.id)}>✓ Mark done</button>
+                )
+              )}
+            </div>
+          )}
+
+          {blockedBy && (
+            <div className="problems" role="alert" style={{ margin: '0 0 12px' }}>
+              <strong>
+                {blockedBy.length === 1 ? 'One subtask is' : `${blockedBy.length} subtasks are`} still
+                open — close {blockedBy.length === 1 ? 'it' : 'these'} first:
+              </strong>
+              <ul>
+                {blockedBy.map((s) => <li key={s.id}>{s.title}</li>)}
+              </ul>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button onClick={() => moveTo(doneList.id, { completeSubtasks: true })}>
+                  Finish {blockedBy.length === 1 ? 'it' : `all ${blockedBy.length}`} and mark done
+                </button>
+                <button className="ghost" onClick={() => setBlockedBy(null)}>Keep it open</button>
+              </div>
+            </div>
+          )}
+
           <TaskFields task={task} onCommit={commit} />
+
+          <Subtasks
+            task={task}
+            reloadKey={subtaskReload}
+            onTask={(updated) => {
+              onSaved(updated);
+              // Ticking the step that was in the way clears the warning about it.
+              if (!updated.subtasks_open) setBlockedBy(null);
+            }}
+            onError={onError}
+          />
 
           {task.source_text && (
             <div className="field">
-              <label>Original Slack message</label>
+              <label>{task.source === 'email' ? 'Original email' : 'Original Slack message'}</label>
               <div className="source-quote">{task.source_text}</div>
             </div>
           )}
 
+          {task.attachments?.length > 0 && (
+            <div className="field">
+              <label>Attachments</label>
+              <div className="link-list">
+                {task.attachments.map((l) => (
+                  <a className="link" key={l.url} href={l.url} target="_blank" rel="noreferrer" title={l.url}>
+                    📎 {truncate(l.label, 46)}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Includes anything linked from the description, so a link only has
+              to be written once to be findable here. */}
           {task.links?.length > 0 && (
             <div className="field">
-              <label>Attachments and links</label>
+              <label>Links</label>
               <div className="link-list">
                 {task.links.map((l) => (
                   <a className="link" key={l.url} href={l.url} target="_blank" rel="noreferrer" title={l.url}>
@@ -214,10 +341,9 @@ export default function TaskModal({
             <div className="row">
               <button className="small" onClick={() => snooze(1)}>Tomorrow</button>
               <button className="small" onClick={() => snooze(7)}>Next week</button>
-              <input
-                type="date"
-                value={task.snooze_until ?? ''}
-                onChange={(e) => snoozeUntil(e.target.value || null)}
+              <AutoSaveDate
+                value={task.snooze_until}
+                onCommit={snoozeUntil}
                 style={{ width: 'auto' }}
                 aria-label="Snooze until"
               />
@@ -252,11 +378,13 @@ export default function TaskModal({
         <aside className="modal-side">
           <h3>Activity</h3>
 
-          {autoIntent === 'done' && (
+          {(autoIntent === 'done' || finishedHere) && task.is_done && (
             <div className="banner" style={{ marginBottom: 12 }}>
               {canReply
                 ? <>Task done — here's a reply for <strong>{task.assigner_name ?? 'the thread'}</strong>. Nothing is sent until you press Send.</>
-                : <>Task done. This one didn't come from Slack, so there's no thread to reply to.</>}
+                : <>Task done. {task.source === 'email'
+                    ? 'It came by email — reply from your mail client; Kent only reads mail.'
+                    : "This one didn't come from Slack, so there's no thread to reply to."}</>}
             </div>
           )}
 
@@ -335,7 +463,9 @@ export default function TaskModal({
             </div>
             {!canReply && (
               <p className="hint" style={{ marginTop: 6 }}>
-                This task didn't come from Slack, so there's no thread to reply to.
+                {task.source === 'email'
+                  ? 'Kent only reads email, so replies go from your mail client. Comments here stay on the card.'
+                  : "This task didn't come from Slack, so there's no thread to reply to."}
               </p>
             )}
           </div>

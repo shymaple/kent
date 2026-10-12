@@ -143,12 +143,12 @@ export function extractLinks(message = '') {
   const text = msg.text ?? '';
   const found = new Map();
 
-  const add = (url, label) => {
+  const add = (url, label, kind) => {
     if (typeof url !== 'string') return;
     const clean = url.replace(/[).,;]+$/, '');
     if (!/^https?:\/\//i.test(clean) || found.has(clean)) return;
     const known = LINK_LABELS.find(([re]) => re.test(clean));
-    found.set(clean, { url: clean, label: label || (known ? known[1] : 'Link') });
+    found.set(clean, { url: clean, label: label || (known ? known[1] : 'Link'), ...(kind ? { kind } : {}) });
   };
 
   // <url|label> and <url>
@@ -162,7 +162,7 @@ export function extractLinks(message = '') {
   for (const f of msg.files ?? []) {
     if (!f?.permalink) continue;
     const kind = (f.filetype || f.pretty_type || 'file').toUpperCase();
-    add(f.permalink, f.name ? `${kind} · ${f.name}` : `${kind} file`);
+    add(f.permalink, f.name ? `${kind} · ${f.name}` : `${kind} file`, 'file');
   }
 
   // Link previews and app attachments.
@@ -173,3 +173,12 @@ export function extractLinks(message = '') {
 
   return [...found.values()];
 }
+
+/**
+ * Is this stored link a file someone uploaded, rather than a URL they wrote?
+ *
+ * New rows say so with `kind`. Rows saved before that was recorded are told
+ * apart by what a Slack file permalink looks like.
+ */
+export const isAttachment = (link) =>
+  link?.kind === 'file' || /^https:\/\/[^/]+\.slack\.com\/files\//i.test(link?.url ?? '');

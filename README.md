@@ -41,7 +41,42 @@ On a real workspace sync: **69 messages → 15 candidates → 14 rejected → 1 
 - Fills in title, description, priority, deadline, category and every link —
   including files uploaded to Slack, stored as the **Slack permalink**, never the
   document itself.
+- **A mention is captured before the model is involved.** Every message that
+  matches you is written to disk the moment Slack hands it over, so Claude being
+  asleep, signed out or rate limited can only delay a decision, never lose one.
+  The queue is drained by whichever sync finds the model working again — and the
+  Inbox says how many are waiting and why, rather than looking quiet.
+- **Reads your email too** (optional, Gmail, read-only). Mail a person addressed
+  to you is held to the same bar as a mention; newsletters, receipts and
+  automated senders are dropped for free. A later email in a thread that already
+  has a card is offered as a **subtask of that card**, so one conversation stays
+  one card. See [SETUP.md](SETUP.md#5-connect-gmail-optional).
+- **Being spoken to is not being given work.** "How are you?", "coming for
+  lunch?", "joining the team dinner on Friday?" never become cards, however
+  directly they're addressed to you. "Book the venue for the team dinner" does.
+- **Subtasks.** A card can hold the steps inside it, and it **cannot be
+  completed while one is still open** — Kent names what's left and offers to
+  close them together. Reopening a step on a finished card moves it back out of
+  Completed.
+- **Add a task from a Slack link.** Paste a link to any message — one that never
+  mentioned you, or from before Kent was installed — and Kent reads that one
+  message and fills in the title, who asked, the channel, the deadline and its
+  attachments. Or write a task by hand, with a formatted description and,
+  optionally, the Slack link, sender and channel it came from.
 - Puts everything in a **triage Inbox** first. You approve, edit, or dismiss.
+- **Asks that expire aren't tasks.** "Can you join the call for 2 minutes?" is
+  over before a card could exist, so it never becomes one. A meeting with a date
+  and something to bring still does.
+- **Skips what you already handled in Slack.** If you replied in the thread or
+  ticked the message with ✅, it never asks you about it again — and a card
+  already sitting in triage retires itself on the next sync. This is what makes
+  the pile after a few days away readable: the half you dealt with on your phone
+  drops out of it. Replies you wrote in Slack also land on the card, so the board
+  stops claiming you ignored someone.
+- **Sleeping is free.** Nothing is lost while the laptop is shut — each channel
+  has its own cursor — and Kent notices it was away rather than waiting out an
+  interval that expired hours ago. A long backlog is pulled in back-to-back
+  passes instead of one chunk per interval.
 - **Custom lists** — add, rename, reorder, delete. Deleting a list moves its tasks;
   it never deletes work.
 - **Reply from the board.** Finish a task, generate a short reply in your own
@@ -105,7 +140,7 @@ prompts/
 ```bash
 npm start                          # server + UI on http://localhost:4317
 npm run dev                        # server --watch + Vite dev server on :5317
-npm test                           # 114 tests, no network and no model calls
+npm test                           # 292 tests, no network and no model calls
 npm run probe                      # verify the Slack token, list your conversations
 npm run dry-run <#channel> [days]  # full pipeline over a real channel, writes nothing
 npm run smoke                      # render every screen once, catch mount errors
@@ -149,7 +184,7 @@ Full detail, including the trust model and how to report a vulnerability:
 
 ## Contributing
 
-Before opening a PR, run `npm test` (118 tests, no network and no model calls),
+Before opening a PR, run `npm test` (292 tests, no network and no model calls),
 `npm run smoke` (renders every screen) and
 `npm run triage-check`. If you touch `prompts/classify.md`, the triage score is the
 thing to watch — it's what keeps Kent from becoming another noisy inbox.

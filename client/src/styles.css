@@ -312,6 +312,9 @@ main.board-main {
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 
+/* Sits behind the sender in the foot: useful, but never the first thing read. */
+.card-sent { color: var(--ink-faint); flex-shrink: 0; }
+
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 9px; border-radius: 20px;
@@ -585,3 +588,100 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--high) 
 }
 .tag button { border: none; background: none; padding: 0 3px; color: var(--ink-faint); line-height: 1; }
 .tag button:hover { color: var(--high); }
+
+/* ---------------------------------------------------------------- toast */
+
+/* Above the dialog backdrop: most failures happen while a dialog is open, and
+   a message underneath a blurred overlay is a message nobody reads. */
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 90; max-width: min(640px, calc(100vw - 32px));
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 10px 10px 14px; border-radius: var(--radius);
+  background: var(--panel); color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--high) 45%, var(--line));
+  border-left: 3px solid var(--high);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- subtasks */
+
+.progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-bottom: 8px; }
+.progress span { display: block; height: 100%; background: var(--low); transition: width 0.18s; }
+.subtask-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.subtask { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.subtask input[type='checkbox'] { width: auto; margin: 0; flex-shrink: 0; }
+.subtask-title {
+  flex: 1; min-width: 0; text-align: left; white-space: normal; overflow-wrap: anywhere;
+  border-color: transparent; background: transparent; padding: 3px 6px; cursor: text;
+}
+.subtask-title:hover { background: var(--panel-2); border-color: var(--line); }
+.subtask.done .subtask-title { color: var(--ink-faint); text-decoration: line-through; }
+.subtask .tiny { opacity: 0; }
+.subtask:hover .tiny, .subtask:focus-within .tiny { opacity: 1; }
+
+.stage-row { margin-bottom: 14px; }
+.row > select.stage-select { flex: 0 1 200px; width: auto; }
+
+/* ------------------------------------------------------- card completion */
+
+.card-slot { border-radius: 8px; margin-bottom: 8px; }
+.card-slot .card { margin-bottom: 0; }
+.card-slot:focus { outline: none; }
+.card-slot:focus-visible .card { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.card-top { display: flex; align-items: flex-start; gap: 8px; }
+.card-top .card-title { flex: 1; min-width: 0; }
+.card-check {
+  width: 16px; height: 16px; padding: 0; margin-top: 2px; border-radius: 50%;
+  border: 1.5px solid var(--ink-faint); background: transparent; position: relative;
+}
+.card-check:hover:not(:disabled) { border-color: var(--low); background: color-mix(in srgb, var(--low) 18%, transparent); }
+.card-check:hover::after {
+  content: '✓'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 10px; line-height: 1; color: var(--low);
+}
+.card.done .card-title { color: var(--ink-faint); text-decoration: line-through; }
+
+/* A proposed subtask reads differently from a proposed card before it is opened. */
+.followup {
+  margin-bottom: 10px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+.followup strong { color: var(--ink); }
+
+/* ------------------------------------------------------------ rich text */
+
+.rich { border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+.rich:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.rich-tools {
+  display: flex; gap: 2px; padding: 4px 6px;
+  border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: 7px 7px 0 0;
+}
+.rich-tools .tiny { color: var(--ink-soft); padding: 2px 8px; }
+.rich-link { padding: 6px; border-bottom: 1px solid var(--line); flex-wrap: nowrap; }
+.rich-box {
+  min-height: 84px; max-height: 320px; overflow-y: auto;
+  padding: 8px 10px; outline: none; overflow-wrap: anywhere; position: relative;
+}
+.rich-box.is-empty::before {
+  content: attr(data-placeholder); color: var(--ink-faint);
+  position: absolute; pointer-events: none;
+}
+.rich-box ul, .rich-box ol { margin: 4px 0; padding-left: 22px; }
+.rich-box p, .rich-box div { margin: 0; }
+.rich-box a { color: var(--accent); }
+.rich-box blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--ink-soft); }
+
+/* ------------------------------------------------------------- new task */
+
+.add-modes { padding: 12px 18px 0; margin-bottom: 0; }
+.origin { margin-bottom: 12px; }
+.origin summary { cursor: pointer; font-size: 12.5px; color: var(--ink-soft); }
+.hint { color: var(--ink-faint); font-size: 12.5px; }
+.hint.warn { color: var(--medium); margin: 6px 0 0; }
+
+.origin { margin-top: 12px; }

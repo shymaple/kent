@@ -2,10 +2,13 @@
  * The full task field set, shared by "add task" and the detail modal so the two
  * can never drift apart.
  */
+import RichText, { linksIn } from './RichText.jsx';
+
 const CATEGORIES = ['bug', 'review', 'meeting', 'admin', 'doc', 'followup', 'other'];
 
 export default function TaskForm({ value, onChange, lists = [], showList = true, autoFocus }) {
   const set = (patch) => onChange({ ...value, ...patch });
+  const found = linksIn(value.description_html);
 
   return (
     <>
@@ -24,13 +27,19 @@ export default function TaskForm({ value, onChange, lists = [], showList = true,
 
       <div className="field">
         <label htmlFor="task-desc">Description</label>
-        <textarea
+        <RichText
           id="task-desc"
-          value={value.description ?? ''}
-          maxLength={2000}
+          label="Description"
+          value={value.description_html ?? ''}
           placeholder="Any detail worth keeping"
-          onChange={(e) => set({ description: e.target.value })}
+          onChange={(description_html) => set({ description_html })}
         />
+        {found.length > 0 && (
+          <p className="hint" style={{ margin: '6px 0 0' }}>
+            {found.length === 1 ? 'This link' : `These ${found.length} links`} will be listed under
+            Links on the task: {found.map((u) => u.replace(/^https?:\/\//, '').slice(0, 40)).join(', ')}
+          </p>
+        )}
       </div>
 
       <div className="field-row">
@@ -70,6 +79,44 @@ export default function TaskForm({ value, onChange, lists = [], showList = true,
           </select>
         </div>
       </div>
+
+      {/* Where it came from. Optional, and collapsed until wanted: most tasks
+          typed in by hand didn't come from anywhere. */}
+      <details className="origin" open={Boolean(value.permalink || value.assigner_name || value.channel_name)}>
+        <summary>Where it came from (optional)</summary>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="task-permalink">Slack message link</label>
+          <input
+            id="task-permalink"
+            type="url"
+            value={value.permalink ?? ''}
+            placeholder="https://your-workspace.slack.com/archives/C…/p…"
+            onChange={(e) => set({ permalink: e.target.value })}
+          />
+        </div>
+        <div className="field-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <div>
+            <label htmlFor="task-from">From</label>
+            <input
+              id="task-from"
+              value={value.assigner_name ?? ''}
+              maxLength={80}
+              placeholder="Who asked"
+              onChange={(e) => set({ assigner_name: e.target.value })}
+            />
+          </div>
+          <div>
+            <label htmlFor="task-channel">Channel</label>
+            <input
+              id="task-channel"
+              value={value.channel_name ?? ''}
+              maxLength={80}
+              placeholder="e.g. eng"
+              onChange={(e) => set({ channel_name: e.target.value })}
+            />
+          </div>
+        </div>
+      </details>
 
       {showList && lists.length > 0 && (
         <div className="field">

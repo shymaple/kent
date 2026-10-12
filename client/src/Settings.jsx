@@ -18,11 +18,35 @@ export default function Settings({ onError, onChange }) {
   const [channelView, setChannelView] = useState('all');     // all | watched | ignored
   const [templateDraft, setTemplateDraft] = useState('');
   const [toneBusy, setToneBusy] = useState(false);
+  const [gmail, setGmail] = useState(null);
+  const [gmailClient, setGmailClient] = useState({ id: '', secret: '' });
+  const [gmailWaiting, setGmailWaiting] = useState(false);
+
+  // Consent happens in another tab, so the only way to know it finished is to
+  // ask. Polls our own server, and only while a consent is actually in flight.
+  useEffect(() => {
+    if (!gmailWaiting) return;
+    const t = setInterval(async () => {
+      try {
+        const next = await api.gmailStatus();
+        if (next.connected) {
+          setGmail(next);
+          setGmailWaiting(false);
+          setGmailClient({ id: '', secret: '' });
+          onChange();
+        }
+      } catch {
+        // transient; the next tick asks again
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [gmailWaiting, onChange]);
 
   async function loadAll() {
     try {
       const s = await api.settings();
       setSettings(s);
+      setGmail(await api.gmailStatus());
       if (s.slack_connected) {
         setHealth(await api.diagnoseSlack());
         // These fail when scopes are missing; the diagnostics panel explains why,
@@ -88,6 +112,12 @@ export default function Settings({ onError, onChange }) {
       onError(e.message);
     }
   }
+
+  /** Change a setting and save it in the same step - for selects and toggles. */
+  const commit = (p) => {
+    patch(p);
+    save(p);
+  };
 
   async function connect() {
     setConnecting(true);
@@ -290,6 +320,93 @@ export default function Settings({ onError, onChange }) {
                 That's a <strong>bot</strong> token. Kent needs the <strong>User</strong> OAuth
                 Token (<code>xoxp-…</code>) — a bot token can't see @mentions of you or your DMs.
               </div>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* ----------------------------------------------------------- Gmail */}
+      <section className="panel">
+        <h2>Email (Gmail)</h2>
+        <p className="hint">
+          Read-only. Kent looks at new mail addressed to you, skips newsletters and automated
+          senders for free, and asks the model only about the rest. A later email in a thread
+          that already has a card is proposed as a subtask of it. Kent never sends, labels or
+          deletes mail. See <code>SETUP.md</code> for the one-time Google Cloud setup.
+        </p>
+
+        {gmail?.connected ? (
+          <div className="row">
+            <span className="chip low">Connected</span>
+            {gmail.address && <span className="chip">{gmail.address}</span>}
+            <div style={{ flex: 1 }} />
+            <button
+              className="ghost"
+              onClick={async () => {
+                try {
+                  await api.disconnectGmail();
+                  setGmail(await api.gmailStatus());
+                  onChange();
+                } catch (e) {
+                  onError(e.message);
+                }
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="field-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <div>
+                <label htmlFor="gmail-client-id">OAuth client ID</label>
+                <input
+                  id="gmail-client-id"
+                  placeholder="…apps.googleusercontent.com"
+                  value={gmailClient.id}
+                  onChange={(e) => setGmailClient({ ...gmailClient, id: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="gmail-client-secret">Client secret</label>
+                <input
+                  id="gmail-client-secret"
+                  type="password"
+                  placeholder="GOCSPX-…"
+                  value={gmailClient.secret}
+                  onChange={(e) => setGmailClient({ ...gmailClient, secret: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className="primary"
+                disabled={!gmailClient.id.trim() || !gmailClient.secret.trim()}
+                onClick={async () => {
+                  try {
+                    const { url } = await api.connectGmail(gmailClient.id.trim(), gmailClient.secret.trim());
+                    // Google's consent screen, in its own tab; this one keeps
+                    // polling so it flips to Connected when you come back.
+                    window.open(url, '_blank', 'noopener');
+                    setGmailWaiting(true);
+                  } catch (e) {
+                    onError(e.message);
+                  }
+                }}
+              >
+                Connect Gmail
+              </button>
+              {gmailWaiting && (
+                <span className="hint" style={{ margin: 0 }}>
+                  Finish in the Google tab that just opened — this page updates when you're done.
+                </span>
+              )}
+            </div>
+            {gmail?.redirect_uri && (
+              <p className="hint" style={{ margin: '10px 0 0' }}>
+                Create the client as type <strong>Desktop app</strong>. Kent's return address is{' '}
+                <code>{gmail.redirect_uri}</code>.
+              </p>
             )}
           </>
         )}
@@ -606,13 +723,14 @@ export default function Settings({ onError, onChange }) {
               min="1"
               value={settings.poll_interval_minutes}
               onChange={(e) => patch({ poll_interval_minutes: e.target.value })}
+              onBlur={() => save()}
             />
           </div>
           <div>
             <label>On a new channel, look back</label>
             <select
               value={settings.backfill_days}
-              onChange={(e) => patch({ backfill_days: e.target.value })}
+              onChange={(e) => commit({ backfill_days: e.target.value })}
             >
               <option value="0">Nothing — only new messages (recommended)</option>
               <option value="1">1 day</option>
@@ -628,6 +746,7 @@ export default function Settings({ onError, onChange }) {
               max="40"
               value={settings.batch_size}
               onChange={(e) => patch({ batch_size: e.target.value })}
+              onBlur={() => save()}
             />
           </div>
         </div>
@@ -635,7 +754,7 @@ export default function Settings({ onError, onChange }) {
         <div className="field-row">
           <div>
             <label>Model</label>
-            <select value={settings.model} onChange={(e) => patch({ model: e.target.value })}>
+            <select value={settings.model} onChange={(e) => commit({ model: e.target.value })}>
               <option value="claude-sonnet-5">Sonnet 5 (recommended)</option>
               <option value="claude-opus-5">Opus 5</option>
               <option value="claude-haiku-4-5-20251001">Haiku 4.5 (cheapest)</option>
@@ -643,13 +762,14 @@ export default function Settings({ onError, onChange }) {
           </div>
           <div>
             <label>Timezone</label>
-            <input value={settings.timezone} onChange={(e) => patch({ timezone: e.target.value })} />
+            <input value={settings.timezone} onChange={(e) => patch({ timezone: e.target.value })}
+              onBlur={() => save()} />
           </div>
           <div>
             <label>Strictness</label>
             <select
               value={settings.min_confidence}
-              onChange={(e) => patch({ min_confidence: e.target.value })}
+              onChange={(e) => commit({ min_confidence: e.target.value })}
             >
               <option value="0.3">Loose — show anything that might be a task</option>
               <option value="0.5">Balanced (recommended)</option>
@@ -663,22 +783,43 @@ export default function Settings({ onError, onChange }) {
               min="1"
               value={settings.stale_after_days}
               onChange={(e) => patch({ stale_after_days: e.target.value })}
+              onBlur={() => save()}
             />
           </div>
           <div>
             <label>Background sync</label>
-            <select value={settings.auto_sync} onChange={(e) => patch({ auto_sync: e.target.value })}>
+            <select value={settings.auto_sync} onChange={(e) => commit({ auto_sync: e.target.value })}>
               <option value="true">On</option>
               <option value="false">Off — manual only</option>
             </select>
           </div>
         </div>
 
+        <label className="toggle" style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={settings.auto_retire_handled !== 'false'}
+            onChange={(e) => {
+              const v = String(e.target.checked);
+              patch({ auto_retire_handled: v });
+              save({ auto_retire_handled: v });
+            }}
+          />
+          Skip anything I already handled in Slack
+        </label>
+        <p className="hint" style={{ marginTop: -6 }}>
+          If you replied in the thread or reacted with{' '}
+          {(settings.handled_reactions ?? []).slice(0, 3).map((r) => `:${r}:`).join(' ') || ':white_check_mark:'},
+          the message never reaches triage — and a card already waiting there retires itself on the
+          next sync. This is what makes the backlog after a few days away readable: the half you
+          dealt with on your phone drops out of it.
+        </p>
+
+        {/* No Save button: the toggles on this page always saved themselves
+            while these fields silently didn't, so a changed interval was lost
+            by anyone who reasonably assumed the page was consistent. */}
         <div className="row end">
-          {saved && <span className="chip low">Saved</span>}
-          <button className="primary" onClick={() => save()}>
-            Save settings
-          </button>
+          <span className="save-state">{saved ? 'Saved' : 'Changes save as you go'}</span>
         </div>
       </section>
 

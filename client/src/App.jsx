@@ -30,6 +30,16 @@ export default function App() {
 
   const lastSeenRun = useRef(null);
 
+  // A failure is news, not state: it is shown above everything (including an
+  // open dialog, where most of them happen), can be dismissed, and leaves by
+  // itself. It used to replace the sync status line until the next manual sync,
+  // so one failed save kept announcing itself for the rest of the day.
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 9_000);
+    return () => clearTimeout(t);
+  }, [error]);
+
   const loadStatus = useCallback(async () => {
     try {
       const next = await api.syncStatus();
@@ -65,10 +75,14 @@ export default function App() {
     const t = setInterval(loadStatus, 15_000);
     // Coming back to the tab is the moment a stale board is most obvious.
     const onFocus = () => loadStatus();
+    // Opening the lid shows the tab again without necessarily focusing it.
+    const onVisible = () => document.visibilityState === 'visible' && loadStatus();
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearInterval(t);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadStatus, loadSettings, refreshKey]);
 
@@ -94,7 +108,7 @@ export default function App() {
       const result = await api.runSync();
       if (result.skipped) {
         setError(
-          result.reason === 'no_token' ? 'Connect Slack in Settings first.' : 'A sync is already running.'
+          result.reason === 'no_token' ? 'Connect Slack or Gmail in Settings first.' : 'A sync is already running.'
         );
       }
       setRefreshKey((k) => k + 1);
@@ -141,7 +155,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            Kent<span>Slack → Kanban</span>
+            Kent<span>Slack + email → Kanban</span>
           </div>
           <nav className="tabs">
             <button className={`tab ${tab === 'board' ? 'active' : ''}`} onClick={() => setTab('board')}>
@@ -162,12 +176,23 @@ export default function App() {
 
           <div style={{ flex: 1 }} />
 
-          <span className={`status-note ${error ? 'err' : ''}`}>
-            {error ??
-              (syncing || status?.running
+          <span
+            className={`status-note ${lastRun?.error && !syncing ? 'err' : ''}`}
+            title={lastRun?.error ?? undefined}
+          >
+            {(syncing || status?.running
                 ? 'Syncing…'
+                : lastRun?.error
+                  // A sync that failed must not read as a quiet one.
+                  ? `Last sync ${formatWhen(lastRun.finished_at ?? lastRun.started_at)} had a problem — ${lastRun.error}`
                 : lastRun?.finished_at
-                  ? `Last sync ${formatWhen(lastRun.finished_at)} · ${lastRun.messages_seen} msgs · ${lastRun.llm_calls} LLM call${lastRun.llm_calls === 1 ? '' : 's'}`
+                  ? `Last sync ${formatWhen(lastRun.finished_at)} · ${lastRun.messages_seen} msgs · ${lastRun.llm_calls} LLM call${lastRun.llm_calls === 1 ? '' : 's'}` +
+                    // Worth saying out loud: silence here would look like Kent
+                    // simply missed them.
+                    (lastRun.handled > 0 ? ` · ${lastRun.handled} handled in Slack` : '') +
+                    (status?.awaiting_model?.waiting > 0
+                      ? ` · ${status.awaiting_model.waiting} waiting for Claude`
+                      : '')
                   : 'Never synced')}
           </span>
           <button className="primary" onClick={syncNow} disabled={syncing || status?.running}>
@@ -191,6 +216,7 @@ export default function App() {
         {tab === 'inbox' && (
           <Inbox
             refreshKey={refreshKey}
+            waiting={status?.awaiting_model}
             onError={setError}
             onChange={() => setRefreshKey((k) => k + 1)}
           />
@@ -205,6 +231,13 @@ export default function App() {
           />
         )}
       </main>
+
+      {error && (
+        <div className="toast" role="alert">
+          <span>{error}</span>
+          <button className="ghost small" onClick={() => setError(null)} aria-label="Dismiss">✕</button>
+        </div>
+      )}
 
       {searchOpen && (
         <CommandBar

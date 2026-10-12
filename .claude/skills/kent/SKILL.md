@@ -33,6 +33,11 @@ zero model calls.
   own interval (Settings → Sync).
 - A sync over a busy backlog can take minutes. Run it once and wait.
 
+A mention is written to disk **before** the model is consulted, so Claude being
+asleep, signed out or rate limited delays a verdict but never loses a message.
+Whichever sync next finds the model working drains the backlog. This is why a
+sync can report `inboxed: 0` and still be healthy — check the waiting count.
+
 ## Common tasks
 
 **Sync now** — `curl -s -X POST localhost:4317/api/sync/run`
@@ -72,11 +77,23 @@ Work through it in this order — most problems are the first two.
    is an `@channel`/`@here` broadcast, or comes from someone on the priority
    list. This is identical in DMs — ordinary chat never qualifies. Bot messages
    only count if they @mention the user.
-3. **Did the model reject it?** Non-tasks are recorded in `seen_messages` with
-   outcome `not_task`. Being @mentioned isn't enough: questions answerable in one
+3. **Did you already handle it in Slack?** A ✅ you left, or a reply you posted in
+   the thread, retires the message — `seen_messages` outcome `handled`. This is
+   working as intended, not a miss.
+4. **Is it still waiting on the model?** Outcome `queued` means captured but not
+   yet judged — a signed-out or rate-limited Claude. `GET /api/inbox` reports the
+   waiting count and the last error; the fix is to sign in and sync again, and
+   nothing needs re-fetching.
+5. **Did the model reject it?** Non-tasks are recorded in `seen_messages` with
+   outcome `not_task` (the full set is `queued | inboxed | dismissed | not_task |
+   merged | handled`). Being @mentioned isn't enough: questions answerable in one
    reply, FYIs and thanks are all rejected by design.
-4. **Below the confidence floor?** Settings `min_confidence` (default 0.5).
-5. **Older than the cursor?** Backfill defaults to 0 — only messages sent after
+6. **Was the ask already over?** "Hop on the call for 2 min" is dropped on
+   purpose — by `prompts/classify.md`, and again deterministically by
+   `server/ephemeral.js` if the model says task anyway. A meeting that names a day
+   and something to bring survives. Don't chase this as a bug.
+7. **Below the confidence floor?** Settings `min_confidence` (default 0.5).
+8. **Older than the cursor?** Backfill defaults to 0 — only messages sent after
    setup are considered.
 
 To see the whole pipeline over a real channel without writing anything:
@@ -122,3 +139,6 @@ Scope changes require reinstalling the Slack app, then re-pasting the token.
   (`kent-slack`); `GET /api/settings` returns only a masked form.
 - Don't post to Slack, approve, dismiss or delete without asking first.
 - Don't edit `data/app.db` by hand while the server is running.
+- Don't bypass the durable queue. A candidate is enqueued before any model call
+  and leaves only once a verdict has been acted on; short-circuiting that is how
+  a mention gets lost.

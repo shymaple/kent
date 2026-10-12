@@ -42,5 +42,58 @@
     "text": "<!channel> reminder that the office is closed on Friday" },
 
   { "id": "t5", "channel": "#eng", "from": "Alex", "sentAt": "2026-08-07T11:10:00+05:30",
-    "text": "<@me> blocked on your review of the API spec, can you take a look by EOD?" }
+    "text": "<@me> blocked on your review of the API spec, can you take a look by EOD?" },
+
+  { "id": "n11", "channel": "#team", "from": "Robin", "sentAt": "2026-08-07T11:15:00+05:30",
+    "text": "<@me> how are you?" },
+
+  { "id": "n12", "channel": "#team", "from": "Dana", "sentAt": "2026-08-07T11:20:00+05:30",
+    "text": "<@me> are you coming for lunch?" },
+
+  { "id": "n13", "channel": "#team", "from": "Jordan", "sentAt": "2026-08-07T11:25:00+05:30",
+    "text": "<@me> good morning! how was the weekend?" },
+
+  { "id": "n14", "channel": "#team", "from": "Alex", "sentAt": "2026-08-07T11:30:00+05:30",
+    "text": "<@me> are you joining the team dinner on Friday? need to know by tomorrow" },
+
+  { "id": "n15", "channel": "#general", "from": "Dana", "sentAt": "2026-08-07T11:35:00+05:30",
+    "text": "<@me> happy birthday!! hope you have a great one" },
+
+  { "id": "n16", "channel": "#team", "from": "Robin", "sentAt": "2026-08-07T11:40:00+05:30",
+    "text": "<@me> can you pick up my parcel from reception on your way in?" },
+
+  { "id": "n17", "channel": "#eng", "from": "Jordan", "sentAt": "2026-08-07T11:45:00+05:30",
+    "text": "<@me> are you in office tomorrow?" },
+
+  { "id": "n18", "channel": "#random", "from": "Alex", "sentAt": "2026-08-07T11:50:00+05:30",
+    "text": "<@me> did you watch the match last night? what a finish" },
+
+  { "id": "t6", "channel": "#team", "from": "Dana", "sentAt": "2026-08-07T11:55:00+05:30",
+    "text": "<@me> can you book the venue for the team dinner on Friday and share the headcount with finance?" },
+
+  { "id": "t7", "channel": "#eng", "from": "Alex", "sentAt": "2026-08-07T12:00:00+05:30",
+    "text": "<@me> we have the lunch-and-learn on Thursday, can you present the Q3 roadmap there?" },
+
+  { "id": "t8", "channel": "#sales", "from": "Robin", "sentAt": "2026-08-07T12:05:00+05:30",
+    "text": "<@me> hey, how are you? when you get time please update the pricing sheet with the new SKUs" },
+
+  { "id": "t9", "channel": "email", "from": "Priya Shah", "sentAt": "2026-08-07T12:10:00+05:30",
+    "text": "Subject: Contract renewal - Acme\n\nHi,\n\nCould you send over the revised renewal quote for Acme by Wednesday? They want to sign before month end.\n\nThanks,\nPriya" },
+
+  { "id": "n19", "channel": "email", "from": "Priya Shah", "sentAt": "2026-08-07T12:15:00+05:30",
+    "text": "Subject: Re: Contract renewal - Acme\n\nGot it, thanks so much - this is exactly what I needed!" },
+
+  { "id": "n20", "channel": "email", "from": "Finance Team", "sentAt": "2026-08-07T12:20:00+05:30",
+    "text": "Subject: Your July expense report has been reimbursed\n\nHi,\n\nYour expense report for July has been processed and the amount will reach your account within 3 working days. No action is needed." },
+
+  { "id": "n21", "channel": "email", "from": "Rahul Mehta", "sentAt": "2026-08-07T12:25:00+05:30",
+    "text": "Subject: Lunch on Friday?\n\nHey, a few of us are heading to the new place on MG Road on Friday around 1. Want to come along?" },
+
+  { "id": "t10", "channel": "email", "from": "Priya Shah", "sentAt": "2026-08-07T12:30:00+05:30",
+    "threadContext": "A later email in a thread already tracked as the task \"Send revised renewal quote for Acme\".",
+    "text": "Subject: Re: Contract renewal - Acme\n\nThanks for the quote. One more thing - legal needs the updated DPA attached as well, can you get that from them and send it across?" },
+
+  { "id": "n22", "channel": "email", "from": "Priya Shah", "sentAt": "2026-08-07T12:35:00+05:30",
+    "threadContext": "A later email in a thread already tracked as the task \"Send revised renewal quote for Acme\".",
+    "text": "Subject: Re: Contract renewal - Acme\n\nAny update on the quote? Just checking where this is." }
 ]

@@ -1,4 +1,5 @@
 import express from 'express';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,12 +8,22 @@ import {
   db, getSettings, setSettings, DEFAULT_SETTINGS,
   listIdForStatus, statusForList, isDoneList,
 } from './db.js';
-import { getSlackToken, hasSlackToken, maskToken, setSlackToken, clearSlackToken } from './secrets.js';
+import {
+  getSlackToken, hasSlackToken, maskToken, setSlackToken, clearSlackToken,
+  clearGmailSecrets, hasGmail, setGmailSecrets,
+} from './secrets.js';
+import * as gmail from './gmail.js';
 import * as slack from './slack.js';
-import { lastSyncRun, refreshDirectories, runSync, startScheduler, isRunning } from './sync.js';
+import { lastSyncRun, nextSyncAt, refreshDirectories, runSync, startScheduler, isRunning } from './sync.js';
 import { daysUntil, localDateString } from './enrich.js';
+import { parseHandledReactions } from './handled.js';
+import { queueStats } from './queue.js';
 import { draftComment, summariseTone } from './classify.js';
 import { renderSlackText, renderConversationName, invalidateDirectory } from './render.js';
+import { extractLinks, isAttachment } from './prefilter.js';
+import { htmlToText, linksInHtml, sanitizeHtml } from './richtext.js';
+import { parseSlackLink } from './slacklink.js';
+import { importSlackMessage } from './importslack.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
@@ -30,7 +41,18 @@ const app = express();
  *
  * Browsers always attach Origin to cross-origin requests, so allowlisting it is
  * enough; Sec-Fetch-Site is checked too where the browser provides it.
+ *
+ * One request is expected to arrive cross-site: Google sending the browser back
+ * after the Gmail consent screen. It is let through the Sec-Fetch-Site check
+ * only as a top-level GET navigation to that exact path, and the handler then
+ * refuses it unless it carries the one-time `state` Kent generated when the
+ * user pressed Connect - the standard OAuth CSRF defence. A page that merely
+ * links or redirects there has no valid state and changes nothing.
  */
+const OAUTH_RETURN = '/api/gmail/callback';
+const isOAuthReturn = (req) =>
+  req.method === 'GET' && req.path === OAUTH_RETURN && req.headers['sec-fetch-mode'] === 'navigate';
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1']);
 const isLoopbackHost = (value) => LOOPBACK.has(String(value).replace(/^\[|\]$/g, ''));
 
@@ -54,7 +76,7 @@ app.use((req, res, next) => {
   }
 
   const site = req.headers['sec-fetch-site'];
-  if (site && site !== 'same-origin' && site !== 'none') {
+  if (site && site !== 'same-origin' && site !== 'none' && !isOAuthReturn(req)) {
     return res.status(403).json({ error: 'Cross-site requests are not allowed.' });
   }
 
@@ -66,9 +88,27 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = Number(process.env.PORT) || 4317;
 const STATUSES = new Set(['open', 'in_progress', 'in_review', 'completed']);
 const PRIORITIES = new Set(['high', 'medium', 'low']);
+const CATEGORIES = new Set(['bug', 'review', 'meeting', 'admin', 'doc', 'followup', 'other', 'broadcast']);
+
+/**
+ * A date the client sent, as something safe to store: null for "no date",
+ * undefined for "that isn't one". The year floor is not pedantry - a date input
+ * typed by keyboard passes through 0002 and 0020 on its way to 2026, and those
+ * were being saved.
+ */
+function cleanDate(value) {
+  if (value === null || value === '') return null;
+  const text = String(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(text))) return undefined;
+  return Number(text.slice(0, 4)) >= 2000 ? text : undefined;
+}
+const BAD_DATE = { error: "That date doesn't look right. Use the calendar, or type it as YYYY-MM-DD." };
 
 const commentStats = db.prepare(
   'SELECT COUNT(*) n, SUM(slack_ts IS NOT NULL) replied FROM comments WHERE task_id = ?'
+);
+const subtaskStats = db.prepare(
+  'SELECT COUNT(*) n, COALESCE(SUM(done = 0), 0) open FROM subtasks WHERE task_id = ?'
 );
 
 /** Whole days since an ISO/SQLite timestamp, or null. */
@@ -80,20 +120,59 @@ function daysSince(stamp) {
 }
 
 /**
+ * When the ask actually arrived, as an ISO instant.
+ *
+ * A Slack ts is epoch seconds with a microsecond suffix ("1720000000.000200"),
+ * and it is the truthful answer: a message synced days later was still sent
+ * when it was sent. Hand-made tasks have no ts, so they fall back to the row's
+ * own creation time.
+ */
+function sentAt(row) {
+  const seconds = Number.parseFloat(row.message_ts);
+  if (Number.isFinite(seconds) && seconds > 0) return new Date(seconds * 1000).toISOString();
+  const created = Date.parse(row.created_at?.includes('T') ? row.created_at : `${String(row.created_at ?? '').replace(' ', 'T')}Z`);
+  return Number.isNaN(created) ? null : new Date(created).toISOString();
+}
+
+/**
  * Shape a task or inbox row for the client. Slack markup is rendered here so no
  * view can accidentally show a raw member id like <@U01ABC23DEF>.
  */
 const parseTask = (row) => {
   const settings = getSettings();
+  const isEmail = row.source === 'email';
+  // Files someone uploaded and URLs someone wrote are different things to go
+  // looking for, so they are listed apart. A link typed into the description
+  // counts as a link on the task without anyone having to add it twice.
+  const stored = JSON.parse(row.links || '[]');
+  const links = new Map();
+  for (const link of [
+    ...stored.filter((l) => !isAttachment(l)),
+    ...linksInHtml(row.description_html).map((l) => ({ ...l, label: l.label ?? undefined })),
+    ...extractLinks(row.description ?? ''),
+  ]) {
+    const known = links.get(link.url);
+    if (!known) links.set(link.url, { url: link.url, label: link.label ?? 'Link' });
+    else if (known.label === 'Link' && link.label) known.label = link.label;
+  }
+
   const base = {
     ...row,
     is_broadcast: Boolean(row.is_broadcast),
-    links: JSON.parse(row.links || '[]'),
+    links: [...links.values()],
+    attachments: stored.filter(isAttachment),
+    description_html: row.description_html ?? null,
     title: renderSlackText(row.title),
     description: renderSlackText(row.description),
     source_text: renderSlackText(row.source_text),
     channel_name: renderConversationName(row.channel_name),
     days_until_due: daysUntil(row.due_date, settings.timezone),
+    // A Gmail id is not a timestamp the way a Slack ts is, so email rows carry
+    // their own; reading the id as one dated every email to 1970.
+    sent_at: row.sent_at ?? sentAt(row),
+    // Lets the UI say "sent" for a Slack ask and "added" for a typed-in one.
+    sent_at_source: isEmail ? 'email' : Number.parseFloat(row.message_ts) > 0 ? 'slack' : 'local',
+    source: isEmail ? 'email' : row.channel_id ? 'slack' : 'manual',
   };
 
   // Only real tasks have comments; inbox rows share this shaper but have no id
@@ -101,6 +180,7 @@ const parseTask = (row) => {
   if (row.list_id === undefined) return base;
 
   const stats = commentStats.get(row.id) ?? { n: 0, replied: 0 };
+  const steps = subtaskStats.get(row.id) ?? { n: 0, open: 0 };
   const list = db.prepare('SELECT semantic FROM lists WHERE id = ?').get(row.list_id);
   const idleDays = daysSince(row.updated_at);
   const threshold = Number(settings.stale_after_days) || 7;
@@ -108,8 +188,13 @@ const parseTask = (row) => {
   return {
     ...base,
     comment_count: stats.n,
+    subtask_count: steps.n,
+    subtasks_open: steps.open,
+    is_done: list?.semantic === 'done',
     replied_in_slack: Boolean(stats.replied),
-    can_reply: Boolean(row.channel_id && (row.thread_ts || row.message_ts)),
+    // Kent reads mail and never writes it, so only a Slack task has a thread
+    // it can reply into.
+    can_reply: Boolean(!isEmail && row.channel_id && (row.thread_ts || row.message_ts)),
     // "Stale" only means something for work supposedly in flight - a card
     // sitting in Open is a backlog item, not a stalled one.
     stale_days: list?.semantic === 'active' && idleDays >= threshold ? idleDays : null,
@@ -140,6 +225,7 @@ app.get('/api/settings', (req, res) => {
     ...settings,
     aliases: JSON.parse(settings.aliases || '[]'),
     comment_templates: JSON.parse(settings.comment_templates || '[]'),
+    handled_reactions: parseHandledReactions(settings.handled_reactions),
     slack_connected: hasSlackToken(),
     slack_token_masked: maskToken(getSlackToken()),
     defaults: DEFAULT_SETTINGS,
@@ -150,7 +236,7 @@ app.put('/api/settings', (req, res) => {
   const allowed = [
     'poll_interval_minutes', 'backfill_days', 'model', 'timezone', 'batch_size', 'auto_sync',
     'slack_user_id_override', 'min_confidence', 'show_completed', 'show_miscellaneous',
-    'watch_priority_people', 'stale_after_days', 'sort_mode',
+    'watch_priority_people', 'stale_after_days', 'sort_mode', 'auto_retire_handled',
   ];
   const patch = {};
   for (const key of allowed) {
@@ -165,7 +251,9 @@ app.put('/api/settings', (req, res) => {
     );
   }
   setSettings(patch);
-  startScheduler();                       // pick up a changed interval immediately
+  // Pick up a changed interval immediately, but saving a setting is not a
+  // reason to hit Slack - the next run stays on schedule.
+  startScheduler({ runNow: false });
   res.json({ ok: true });
 });
 
@@ -211,6 +299,109 @@ app.get('/api/slack/diagnose', h(async (req, res) => {
 
 app.delete('/api/slack/token', (req, res) => {
   clearSlackToken();
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- gmail
+
+/**
+ * Consent attempts in flight: state -> what is needed to finish the exchange.
+ * In memory on purpose - a restart mid-consent should void the attempt - and
+ * short-lived, so an abandoned one cannot be completed by someone else later.
+ */
+const pendingConsent = new Map();
+const CONSENT_TTL_MS = 10 * 60_000;
+const redirectUri = () => `http://127.0.0.1:${PORT}${OAUTH_RETURN}`;
+
+app.get('/api/gmail/status', (req, res) => {
+  res.json({
+    connected: hasGmail(),
+    address: hasGmail() ? getSettings().gmail_address || null : null,
+    redirect_uri: redirectUri(),
+  });
+});
+
+/** Step one: take the OAuth client, hand back the Google consent URL. */
+app.post('/api/gmail/connect', (req, res) => {
+  const clientId = String(req.body?.client_id ?? '').trim();
+  const clientSecret = String(req.body?.client_secret ?? '').trim();
+  if (!clientId || !clientSecret) {
+    return res.status(400).json({ error: 'Both the client ID and the client secret are needed.' });
+  }
+  if (!/\.apps\.googleusercontent\.com$/.test(clientId)) {
+    return res.status(400).json({
+      error: 'That does not look like a Google OAuth client ID - it should end in .apps.googleusercontent.com.',
+    });
+  }
+
+  for (const [key, value] of pendingConsent) {
+    if (value.expires < Date.now()) pendingConsent.delete(key);
+  }
+
+  const state = randomBytes(24).toString('base64url');
+  const verifier = randomBytes(48).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  pendingConsent.set(state, { clientId, clientSecret, verifier, expires: Date.now() + CONSENT_TTL_MS });
+
+  res.json({ url: gmail.buildAuthUrl({ clientId, redirectUri: redirectUri(), state, challenge }) });
+});
+
+/** A fixed page; nothing from the request is ever written into it. */
+const consentPage = (heading, body) => `<!doctype html><meta charset="utf-8"><title>Kent</title>
+<body style="font:15px/1.5 -apple-system,sans-serif;max-width:460px;margin:18vh auto;padding:0 20px;color:#1b1d23">
+<h2 style="margin:0 0 8px">${heading}</h2><p style="color:#5c6270">${body}</p></body>`;
+
+/** Step two: Google sends the browser back here with a one-time code. */
+app.get(OAUTH_RETURN, h(async (req, res) => {
+  const state = String(req.query.state ?? '');
+  const pending = pendingConsent.get(state);
+  pendingConsent.delete(state);
+
+  if (!pending || pending.expires < Date.now()) {
+    return res.status(400).send(consentPage(
+      'That link is not valid',
+      'Kent did not start this sign-in, or it expired. Go back to Settings in Kent and press Connect Gmail again.'
+    ));
+  }
+  if (req.query.error || !req.query.code) {
+    return res.status(400).send(consentPage(
+      'Gmail was not connected',
+      'Google did not grant access. Nothing was stored. You can close this tab and try again from Settings.'
+    ));
+  }
+
+  try {
+    const { refreshToken } = await gmail.exchangeCode({
+      clientId: pending.clientId,
+      clientSecret: pending.clientSecret,
+      code: String(req.query.code),
+      redirectUri: redirectUri(),
+      verifier: pending.verifier,
+    });
+    setGmailSecrets({ clientId: pending.clientId, clientSecret: pending.clientSecret, refreshToken });
+    const { address } = await gmail.getProfile();
+    // A fresh connection starts from now, even if a previous one left a cursor.
+    setSettings({ gmail_address: address, gmail_cursor: '' });
+  } catch (err) {
+    console.error('[api] gmail callback:', err.detail ?? err.message);
+    clearGmailSecrets();
+    gmail.resetAccess();
+    return res.status(502).send(consentPage(
+      'Gmail was not connected',
+      'Google accepted the sign-in but Kent could not finish connecting. Check the terminal running Kent, then try again from Settings.'
+    ));
+  }
+
+  res.send(consentPage(
+    'Gmail is connected',
+    'Kent will read new email from now on, read-only. You can close this tab and go back to Kent.'
+  ));
+}));
+
+app.delete('/api/gmail', (req, res) => {
+  clearGmailSecrets();
+  gmail.resetAccess();
+  setSettings({ gmail_address: '', gmail_cursor: '' });
   res.json({ ok: true });
 });
 
@@ -273,60 +464,100 @@ app.put('/api/people/:id', (req, res) => {
 app.get('/api/inbox', (req, res) => {
   res.json(
     db
-      .prepare("SELECT * FROM inbox_items WHERE state = 'pending' ORDER BY created_at DESC, id DESC")
+      .prepare(
+        // The card a follow-up would be added to. A parent that has since been
+        // deleted comes back null, and approving then makes an ordinary card.
+        `SELECT i.*, t.title AS parent_task_title FROM inbox_items i
+         LEFT JOIN tasks t ON t.id = i.parent_task_id
+         WHERE i.state = 'pending' ORDER BY i.created_at DESC, i.id DESC`
+      )
       .all()
-      .map(parseTask)
+      .map((row) => ({ ...parseTask(row), parent_task_id: row.parent_task_title ? row.parent_task_id : null }))
   );
 });
 
 app.post('/api/inbox/:id/approve', (req, res) => {
   const item = db.prepare('SELECT * FROM inbox_items WHERE id = ?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'not found' });
+  // A double click, or the same Inbox open in two tabs, must not make two cards.
+  if (item.state !== 'pending') {
+    return res.status(409).json({ error: 'That item was already triaged.' });
+  }
 
   // Edits made in the triage UI arrive in the body and win over the model's take.
   const edit = req.body ?? {};
+  const due = edit.due_date !== undefined ? cleanDate(edit.due_date) : item.due_date;
+  if (due === undefined) return res.status(400).json(BAD_DATE);
   const merged = {
-    title: edit.title ?? item.title,
-    description: edit.description ?? item.description,
+    // An emptied title falls back rather than producing a blank card.
+    title: String(edit.title ?? '').trim().slice(0, 120) || item.title,
+    description: edit.description !== undefined ? String(edit.description).trim() || null : item.description,
     priority: PRIORITIES.has(edit.priority) ? edit.priority : item.priority,
-    due_date: edit.due_date !== undefined ? edit.due_date || null : item.due_date,
-    category: edit.category ?? item.category,
+    due_date: due,
+    category: CATEGORIES.has(edit.category) ? edit.category : item.category,
   };
 
-  const listId = listIdForStatus('open');
-  const info = db.prepare(`
-    INSERT INTO tasks
-      (title, description, status, list_id, priority, due_date, category, is_broadcast, position,
-       channel_id, channel_name, message_ts, thread_ts, permalink,
-       assigner_id, assigner_name, links, source_text, confidence)
-    VALUES
-      (@title, @description, 'open', @list_id, @priority, @due_date, @category, @is_broadcast,
-       (SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = @list_id),
-       @channel_id, @channel_name, @message_ts, @thread_ts, @permalink,
-       @assigner_id, @assigner_name, @links, @source_text, @confidence)
-  `).run({
-    ...merged,
-    list_id: listId,
-    is_broadcast: item.is_broadcast,
-    channel_id: item.channel_id,
-    channel_name: item.channel_name,
-    message_ts: item.message_ts,
-    thread_ts: item.thread_ts,
-    permalink: item.permalink,
-    assigner_id: item.assigner_id,
-    assigner_name: item.assigner_name,
-    links: item.links,
-    source_text: item.source_text,
-    confidence: item.confidence,
-  });
+  // A new ask in a thread that already has a card becomes a step on that card.
+  const parent = item.parent_task_id
+    ? db.prepare('SELECT id FROM tasks WHERE id = ?').get(item.parent_task_id)
+    : null;
+  if (parent) {
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO subtasks (task_id, title, source, source_ref, position)
+        VALUES (@id, @title, @source, @ref,
+                (SELECT COALESCE(MAX(position), 0) + 1 FROM subtasks WHERE task_id = @id))
+      `).run({ id: parent.id, title: merged.title, source: item.source, ref: item.message_ts });
+      db.prepare("UPDATE tasks SET updated_at = datetime('now') WHERE id = ?").run(parent.id);
+      reopenIfDone(parent.id);
+      db.prepare("UPDATE inbox_items SET state = 'approved' WHERE id = ?").run(item.id);
+    })();
+    return res.json({
+      ...parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(parent.id)),
+      added_as_subtask: true,
+    });
+  }
 
-  db.prepare("UPDATE inbox_items SET state = 'approved' WHERE id = ?").run(item.id);
-  res.json(parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(info.lastInsertRowid)));
+  const listId = listIdForStatus('open');
+  const taskId = db.transaction(() => {
+    const info = db.prepare(`
+      INSERT INTO tasks
+        (title, description, status, list_id, priority, due_date, category, is_broadcast, position,
+         channel_id, channel_name, message_ts, thread_ts, permalink,
+         assigner_id, assigner_name, links, source_text, confidence, source, sent_at)
+      VALUES
+        (@title, @description, 'open', @list_id, @priority, @due_date, @category, @is_broadcast,
+         (SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = @list_id),
+         @channel_id, @channel_name, @message_ts, @thread_ts, @permalink,
+         @assigner_id, @assigner_name, @links, @source_text, @confidence, @source, @sent_at)
+    `).run({
+      ...merged,
+      list_id: listId,
+      is_broadcast: item.is_broadcast,
+      channel_id: item.channel_id,
+      channel_name: item.channel_name,
+      message_ts: item.message_ts,
+      thread_ts: item.thread_ts,
+      permalink: item.permalink,
+      assigner_id: item.assigner_id,
+      assigner_name: item.assigner_name,
+      links: item.links,
+      source_text: item.source_text,
+      confidence: item.confidence,
+      source: item.source,
+      sent_at: item.sent_at,
+    });
+    db.prepare("UPDATE inbox_items SET state = 'approved' WHERE id = ?").run(item.id);
+    return info.lastInsertRowid;
+  })();
+
+  res.json(parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId)));
 });
 
 app.post('/api/inbox/:id/dismiss', (req, res) => {
   const item = db.prepare('SELECT * FROM inbox_items WHERE id = ?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'not found' });
+  if (item.state !== 'pending') return res.status(409).json({ error: 'That item was already triaged.' });
   db.prepare("UPDATE inbox_items SET state = 'dismissed' WHERE id = ?").run(item.id);
   db.prepare(`
     INSERT INTO seen_messages (channel_id, message_ts, outcome) VALUES (?, ?, 'dismissed')
@@ -431,26 +662,78 @@ app.post('/api/tasks', (req, res) => {
   const { title } = req.body ?? {};
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'title is required' });
 
+  const due = cleanDate(req.body.due_date ?? null);
+  if (due === undefined) return res.status(400).json(BAD_DATE);
+
   const listExists = req.body.list_id
     && db.prepare('SELECT 1 FROM lists WHERE id = ?').get(req.body.list_id);
   const listId = listExists
     ? Number(req.body.list_id)
     : listIdForStatus(STATUSES.has(req.body.status) ? req.body.status : 'open');
 
+  // Where a hand-made task came from, if the user says. A Slack link has to be
+  // a link to one message - then the card can be replied to and is dated by the
+  // message, exactly like one Kent found itself.
+  let origin = { channel_id: null, message_ts: null, thread_ts: null, permalink: null };
+  if (String(req.body.permalink ?? '').trim()) {
+    const link = parseSlackLink(req.body.permalink, { teamDomain: getSettings().slack_team_domain });
+    if (!link.ok) return res.status(400).json({ error: link.error, code: link.code });
+    origin = { channel_id: link.channelId, message_ts: link.ts, thread_ts: link.threadTs, permalink: link.url };
+  }
+  const knownChannel = origin.channel_id
+    ? db.prepare('SELECT name FROM channels WHERE id = ?').get(origin.channel_id)?.name
+    : null;
+  const text = ({ value, max }) => String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max) || null;
+
+  const html = req.body.description_html !== undefined ? sanitizeHtml(req.body.description_html) : null;
+
   const info = db.prepare(`
-    INSERT INTO tasks (title, description, status, list_id, priority, due_date, category, links, position)
-    VALUES (@title, @description, @status, @list_id, @priority, @due_date, @category, '[]',
-            (SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = @list_id))
+    INSERT INTO tasks
+      (title, description, description_html, status, list_id, priority, due_date, category, links, position,
+       channel_id, channel_name, message_ts, thread_ts, permalink, assigner_name)
+    VALUES
+      (@title, @description, @description_html, @status, @list_id, @priority, @due_date, @category, '[]',
+       (SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = @list_id),
+       @channel_id, @channel_name, @message_ts, @thread_ts, @permalink, @assigner_name)
   `).run({
-    title: String(title).trim(),
-    description: req.body.description || null,
+    ...origin,
+    channel_name: text({ value: req.body.channel_name, max: 80 })?.replace(/^#/, '') ?? knownChannel ?? null,
+    assigner_name: text({ value: req.body.assigner_name, max: 80 }),
+    title: String(title).trim().slice(0, 120),
+    description_html: html,
+    description: html ? htmlToText(html) : String(req.body.description ?? '').trim() || null,
     status: statusForList(listId),
     list_id: listId,
     priority: PRIORITIES.has(req.body.priority) ? req.body.priority : 'medium',
-    due_date: req.body.due_date || null,
-    category: req.body.category || 'other',
+    due_date: due,
+    category: CATEGORIES.has(req.body.category) ? req.body.category : 'other',
   });
+  // A sync that would also have caught that message must not offer it again.
+  if (origin.channel_id) {
+    db.prepare(`
+      INSERT INTO seen_messages (channel_id, message_ts, outcome) VALUES (?, ?, 'inboxed')
+      ON CONFLICT(channel_id, message_ts) DO NOTHING
+    `).run(origin.channel_id, origin.message_ts);
+  }
   res.json(parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(info.lastInsertRowid)));
+});
+
+/**
+ * Create a task from nothing but a link to a Slack message. One model call,
+ * made because the user asked - never part of a sync.
+ */
+app.post('/api/tasks/from-slack', async (req, res) => {
+  try {
+    const { task, phrasedByModel } = await importSlackMessage(req.body?.url, { listId: req.body?.list_id });
+    res.json({ ...parseTask(task), phrased_by_model: phrasedByModel });
+  } catch (err) {
+    if (!err.status) console.error('[api] from-slack:', err.detail ?? err.stack ?? err.message);
+    res.status(err.status ?? 500).json({
+      error: err.userMessage ?? 'Something went wrong. Check the terminal running Kent for details.',
+      code: err.code,
+      ...(err.taskId ? { task_id: err.taskId } : {}),
+    });
+  }
 });
 
 app.patch('/api/tasks/:id', (req, res) => {
@@ -460,11 +743,25 @@ app.patch('/api/tasks/:id', (req, res) => {
   const patch = {};
   const body = req.body ?? {};
   if (body.title !== undefined) patch.title = String(body.title).trim() || task.title;
-  if (body.description !== undefined) patch.description = body.description || null;
-  if (body.due_date !== undefined) patch.due_date = body.due_date || null;
-  if (body.category !== undefined) patch.category = body.category;
-  if (body.snooze_until !== undefined) patch.snooze_until = body.snooze_until || null;
-  if (body.position !== undefined) patch.position = Number(body.position);
+  if (body.description_html !== undefined) {
+    // Stored only after being rebuilt from the allowlist; the plain rendering
+    // is what search, the card and the reply drafter read.
+    patch.description_html = sanitizeHtml(body.description_html);
+    patch.description = patch.description_html ? htmlToText(patch.description_html) : null;
+  } else if (body.description !== undefined) {
+    patch.description = String(body.description ?? '').trim() || null;
+    patch.description_html = null;
+  }
+  for (const key of ['due_date', 'snooze_until']) {
+    if (body[key] === undefined) continue;
+    const date = cleanDate(body[key]);
+    if (date === undefined) return res.status(400).json(BAD_DATE);
+    patch[key] = date;
+  }
+  if (CATEGORIES.has(body.category)) patch.category = body.category;
+  if (Number.isFinite(Number(body.position)) && body.position !== null && body.position !== undefined) {
+    patch.position = Number(body.position);
+  }
   if (PRIORITIES.has(body.priority)) patch.priority = body.priority;
 
   // Moving between lists is the primary action; `status` is kept in step so the
@@ -480,18 +777,122 @@ app.patch('/api/tasks/:id', (req, res) => {
   }
   if (body.archived !== undefined) patch.archived_at = body.archived ? new Date().toISOString() : null;
 
-  const keys = Object.keys(patch);
-  if (keys.length) {
-    const sets = keys.map((k) => `${k} = @${k}`).join(', ');
-    db.prepare(`UPDATE tasks SET ${sets}, updated_at = datetime('now') WHERE id = @id`)
-      .run({ ...patch, id: task.id });
+  // A task with a step still open is not finished, however it is being closed -
+  // dragged, ticked on the card, or marked done in the dialog. The caller gets
+  // the open steps back so it can name them, and may close them all in the same
+  // breath by saying so explicitly.
+  const finishing = patch.list_id !== undefined && isDoneList(patch.list_id) && !isDoneList(task.list_id);
+  const open = finishing ? openSubtasks.all(task.id) : [];
+  if (open.length && body.complete_subtasks !== true) {
+    return res.status(409).json({
+      code: 'open_subtasks',
+      open_subtasks: open,
+      error:
+        open.length === 1
+          ? `One subtask is still open: “${open[0].title}”. Close it first.`
+          : `${open.length} subtasks are still open. Close them first.`,
+    });
   }
+
+  const keys = Object.keys(patch);
+  db.transaction(() => {
+    if (open.length) finishSubtasks.run(task.id);
+    if (keys.length) {
+      const sets = keys.map((k) => `${k} = @${k}`).join(', ');
+      db.prepare(`UPDATE tasks SET ${sets}, updated_at = datetime('now') WHERE id = @id`)
+        .run({ ...patch, id: task.id });
+    }
+  })();
   res.json(parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id)));
 });
 
 app.delete('/api/tasks/:id', (req, res) => {
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- subtasks
+
+const openSubtasks = db.prepare(
+  'SELECT id, title FROM subtasks WHERE task_id = ? AND done = 0 ORDER BY position, id'
+);
+const finishSubtasks = db.prepare(
+  "UPDATE subtasks SET done = 1, done_at = datetime('now') WHERE task_id = ? AND done = 0"
+);
+const subtasksFor = db.prepare('SELECT * FROM subtasks WHERE task_id = ? ORDER BY position, id');
+const parseSubtask = (row) => ({ ...row, done: Boolean(row.done) });
+
+/**
+ * A finished task that gains an open step is no longer finished. Moving it back
+ * keeps the one promise the Completed column makes - nothing in it is waiting on
+ * you - instead of leaving a "done" card with work quietly attached.
+ */
+function reopenIfDone(taskId) {
+  const task = db.prepare('SELECT list_id FROM tasks WHERE id = ?').get(taskId);
+  if (!task || !isDoneList(task.list_id)) return;
+  const listId = listIdForStatus('in_progress');
+  if (!listId || isDoneList(listId)) return;
+  db.prepare(`
+    UPDATE tasks SET list_id = @listId, status = @status, completed_at = NULL,
+      position = (SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = @listId),
+      updated_at = datetime('now')
+    WHERE id = @id
+  `).run({ listId, status: statusForList(listId), id: taskId });
+}
+
+/** Every subtask write answers with the steps and the card, so counters can't drift. */
+const subtaskReply = (taskId) => ({
+  subtasks: subtasksFor.all(taskId).map(parseSubtask),
+  task: parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId)),
+});
+
+app.get('/api/tasks/:id/subtasks', (req, res) => {
+  res.json(subtasksFor.all(req.params.id).map(parseSubtask));
+});
+
+app.post('/api/tasks/:id/subtasks', (req, res) => {
+  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: 'not found' });
+
+  const title = String(req.body?.title ?? '').trim().slice(0, 200);
+  if (!title) return res.status(400).json({ error: 'A subtask needs a title.' });
+
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO subtasks (task_id, title, position)
+      VALUES (@id, @title, (SELECT COALESCE(MAX(position), 0) + 1 FROM subtasks WHERE task_id = @id))
+    `).run({ id: task.id, title });
+    db.prepare("UPDATE tasks SET updated_at = datetime('now') WHERE id = ?").run(task.id);
+    reopenIfDone(task.id);
+  })();
+  res.json(subtaskReply(task.id));
+});
+
+app.patch('/api/subtasks/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM subtasks WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const body = req.body ?? {};
+  const title = body.title !== undefined ? String(body.title).trim().slice(0, 200) || row.title : row.title;
+  const done = body.done !== undefined ? (body.done ? 1 : 0) : row.done;
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE subtasks SET title = ?, done = ?,
+        done_at = CASE WHEN ? = 1 THEN COALESCE(done_at, datetime('now')) ELSE NULL END
+      WHERE id = ?
+    `).run(title, done, done, row.id);
+    db.prepare("UPDATE tasks SET updated_at = datetime('now') WHERE id = ?").run(row.task_id);
+    if (!done) reopenIfDone(row.task_id);
+  })();
+  res.json(subtaskReply(row.task_id));
+});
+
+app.delete('/api/subtasks/:id', (req, res) => {
+  const row = db.prepare('SELECT task_id FROM subtasks WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  db.prepare('DELETE FROM subtasks WHERE id = ?').run(req.params.id);
+  res.json(subtaskReply(row.task_id));
 });
 
 // ---------------------------------------------------------------- comments
@@ -640,9 +1041,15 @@ app.get('/api/sync/status', (req, res) => {
   const pending = db.prepare("SELECT COUNT(*) n FROM inbox_items WHERE state = 'pending'").get().n;
   res.json({
     running: isRunning(),
-    connected: hasSlackToken(),
+    // Either source is enough for Kent to have something to do.
+    connected: hasSlackToken() || hasGmail(),
     inbox_pending: pending,
     last_run: lastSyncRun(),
+    next_run_at: nextSyncAt(),
+    // Messages captured but not yet judged. Never silently zero: if Claude is
+    // signed out, this is the difference between "quiet day" and "nothing has
+    // been looked at since Tuesday".
+    awaiting_model: queueStats(),
   });
 });
 

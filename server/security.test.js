@@ -28,7 +28,7 @@ const { buildAliasMatcher } = await import('./prefilter.js');
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1']);
 const isLoopbackHost = (v) => LOOPBACK.has(String(v).replace(/^\[|\]$/g, ''));
 
-function guard(headers) {
+function guard(headers, { method = 'GET', path = '/api/tasks' } = {}) {
   const host = String(headers.host ?? '').replace(/:\d+$/, '');
   if (!isLoopbackHost(host)) return 403;
 
@@ -43,8 +43,10 @@ function guard(headers) {
     if (!hostname || !isLoopbackHost(hostname)) return 403;
   }
 
+  const oauthReturn =
+    method === 'GET' && path === '/api/gmail/callback' && headers['sec-fetch-mode'] === 'navigate';
   const site = headers['sec-fetch-site'];
-  if (site && site !== 'same-origin' && site !== 'none') return 403;
+  if (site && site !== 'same-origin' && site !== 'none' && !oauthReturn) return 403;
 
   return 200;
 }
@@ -63,6 +65,23 @@ test('a cross-site POST is refused even with no body or content-type', () => {
 test('a cross-site request is refused via Sec-Fetch-Site too', () => {
   assert.equal(guard({ host: 'localhost:4317', 'sec-fetch-site': 'cross-site' }), 403);
   assert.equal(guard({ host: 'localhost:4317', 'sec-fetch-site': 'same-site' }), 403);
+});
+
+test('the only cross-site request let through is the browser returning from Google consent', () => {
+  const fromGoogle = { host: '127.0.0.1:4317', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate' };
+  assert.equal(guard(fromGoogle, { path: '/api/gmail/callback' }), 200);
+
+  // Same headers, anything else about the request different: still refused.
+  assert.equal(guard(fromGoogle, { path: '/api/tasks' }), 403, 'no other path');
+  assert.equal(guard(fromGoogle, { path: '/api/gmail/callback', method: 'POST' }), 403, 'no other method');
+  assert.equal(guard(fromGoogle, { path: '/api/gmail/connect', method: 'POST' }), 403);
+  assert.equal(
+    guard({ ...fromGoogle, 'sec-fetch-mode': 'cors' }, { path: '/api/gmail/callback' }), 403,
+    'a script fetching it from another page is not a navigation'
+  );
+  // And the exemption is from Sec-Fetch-Site only - never from the Host or Origin checks.
+  assert.equal(guard({ ...fromGoogle, host: 'kent.evil.example' }, { path: '/api/gmail/callback' }), 403);
+  assert.equal(guard({ ...fromGoogle, origin: 'https://evil.example' }, { path: '/api/gmail/callback' }), 403);
 });
 
 test('DNS rebinding is refused by the Host allowlist', () => {

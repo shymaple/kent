@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api.js';
-import { dueChipClass, dueLabel } from './TaskCard.jsx';
+import { dueChipClass, dueLabel, sentFull, sentShort } from './TaskCard.jsx';
+
+const CATEGORIES = ['bug', 'review', 'meeting', 'admin', 'doc', 'followup', 'other'];
 
 const REASON_LABEL = {
   mention: 'mentioned you',
@@ -11,9 +13,24 @@ const REASON_LABEL = {
   thread_reply: 'thread reply',
   broadcast: 'channel-wide',
   alias: 'used your name',
+  email_to: 'emailed you',
+  email_cc: 'named you in an email',
 };
 
-export default function Inbox({ refreshKey, onError, onChange }) {
+/** Plain-language explanation of a queue that isn't moving. */
+function WaitingBanner({ waiting }) {
+  if (!waiting?.waiting) return null;
+  return (
+    <div className="banner">
+      <strong>{waiting.waiting} message{waiting.waiting === 1 ? '' : 's'} waiting to be judged.</strong>{' '}
+      They were captured from Slack and are safe on disk — Claude just hasn't looked at them yet.
+      They'll appear here on the next sync that reaches it.
+      {waiting.last_error && <> Last attempt said: “{waiting.last_error}”</>}
+    </div>
+  );
+}
+
+export default function Inbox({ refreshKey, waiting, onError, onChange }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null); // id being edited
   const [draft, setDraft] = useState({});
@@ -38,7 +55,7 @@ export default function Inbox({ refreshKey, onError, onChange }) {
       description: item.description ?? '',
       priority: item.priority,
       due_date: item.due_date ?? '',
-      category: item.category ?? 'other',
+      category: CATEGORIES.includes(item.category) ? item.category : 'other',
     });
   }
 
@@ -70,14 +87,20 @@ export default function Inbox({ refreshKey, onError, onChange }) {
   }
 
   if (items.length === 0) {
-    return <p className="empty">Inbox is clear. New Slack asks land here after a sync.</p>;
+    return (
+      <>
+        <WaitingBanner waiting={waiting} />
+        <p className="empty">Inbox is clear. New Slack asks land here after a sync.</p>
+      </>
+    );
   }
 
   return (
     <>
+      <WaitingBanner waiting={waiting} />
       <div className="banner">
-        {items.length} item{items.length === 1 ? '' : 's'} to triage. Approving creates a card in{' '}
-        <strong>Open</strong>; dismissing hides that Slack message for good.
+        {items.length} item{items.length === 1 ? '' : 's'} to triage. Approving puts a card on your
+        board; dismissing hides that message for good.
       </div>
 
       <div className="inbox-list">
@@ -88,11 +111,23 @@ export default function Inbox({ refreshKey, onError, onChange }) {
               key={item.id}
               className={`inbox-item p-${item.priority} ${item.is_broadcast ? 'misc' : ''}`}
             >
+              {/* A new ask in a thread that already has a card: approving adds a
+                  step to that card rather than a second card for the same work. */}
+              {item.parent_task_id && (
+                <div className="followup">
+                  ↳ Follow-up in a thread you're already tracking — approving adds this as a
+                  subtask of <strong>{item.parent_task_title}</strong>.
+                </div>
+              )}
+
               {isEditing ? (
                 <>
                   <div className="field">
-                    <label>Title</label>
+                    <label htmlFor={`inbox-title-${item.id}`}>Title</label>
                     <input
+                      id={`inbox-title-${item.id}`}
+                      autoFocus
+                      maxLength={120}
                       value={draft.title}
                       onChange={(e) => setDraft({ ...draft, title: e.target.value })}
                     />
@@ -126,10 +161,12 @@ export default function Inbox({ refreshKey, onError, onChange }) {
                     </div>
                     <div>
                       <label>Category</label>
-                      <input
+                      <select
                         value={draft.category}
                         onChange={(e) => setDraft({ ...draft, category: e.target.value })}
-                      />
+                      >
+                        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
                     </div>
                   </div>
                 </>
@@ -152,9 +189,14 @@ export default function Inbox({ refreshKey, onError, onChange }) {
                   {item.assigner_name ?? 'someone'} · {REASON_LABEL[item.reason] ?? item.reason}
                 </span>
                 <span className="chip">{item.channel_name}</span>
+                {sentShort(item.sent_at) && (
+                  <span className="chip" title={sentFull(item.sent_at, item.sent_at_source)}>
+                    🕒 {sentShort(item.sent_at)}
+                  </span>
+                )}
                 {item.permalink && (
                   <a className="chip" href={item.permalink} target="_blank" rel="noreferrer">
-                    ↗ Slack
+                    ↗ {item.source === 'email' ? 'Email' : 'Slack'}
                   </a>
                 )}
                 {item.links?.map((l) => (
@@ -175,7 +217,7 @@ export default function Inbox({ refreshKey, onError, onChange }) {
                     </button>
                     <button
                       className="primary"
-                      disabled={busy === item.id}
+                      disabled={busy === item.id || !draft.title.trim()}
                       onClick={() => approve(item, { ...draft, due_date: draft.due_date || null })}
                     >
                       Save & approve
@@ -188,7 +230,7 @@ export default function Inbox({ refreshKey, onError, onChange }) {
                     </button>
                     <button onClick={() => startEdit(item)}>Edit</button>
                     <button className="primary" disabled={busy === item.id} onClick={() => approve(item)}>
-                      Approve
+                      {item.parent_task_id ? 'Add as subtask' : 'Approve'}
                     </button>
                   </>
                 )}

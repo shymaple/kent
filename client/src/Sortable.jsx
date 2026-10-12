@@ -11,7 +11,7 @@ import TaskCard from './TaskCard.jsx';
  * slides down under a transition, which is what makes the outcome of a drop
  * readable before you let go.
  */
-export function SortableCard({ task, onOpen }) {
+export function SortableCard({ task, onOpen, onComplete }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'task', listId: task.list_id },
@@ -26,10 +26,24 @@ export function SortableCard({ task, onOpen }) {
         // Keep the space, drop the contents: this is the gap the card will fill.
         opacity: isDragging ? 0 : 1,
       }}
+      className="card-slot"
       {...attributes}
       {...listeners}
+      aria-label={`${task.title}. Enter opens, Space picks up to move.`}
+      // One tab stop per card: Enter opens it, Space lifts it for a keyboard
+      // move (see the KeyboardSensor codes in Board). Keys from controls inside
+      // the card are theirs, not the card's.
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' && !isDragging) {
+          e.preventDefault();
+          onOpen(task);
+          return;
+        }
+        listeners?.onKeyDown?.(e);
+      }}
     >
-      <TaskCard task={task} onOpen={onOpen} />
+      <TaskCard task={task} onOpen={onOpen} onComplete={onComplete} focusable={false} />
     </div>
   );
 }
